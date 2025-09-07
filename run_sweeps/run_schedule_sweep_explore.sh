@@ -1,6 +1,6 @@
 ALGORITHM="ERM_GRAD_INHIB_FAST_dp_thresh_layerSchedule"
-DATASET="OfficeHome"
-SWEEP="sweep_schedule_explore"
+DATASET="VLCS"
+SWEEP="sweep1"
 
 # Determine base directory (parent of run_sweeps)
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -15,7 +15,7 @@ python -m domainbed.scripts.sweep_schedule launch\
        --command_launcher multi_gpu\
        --algorithms ${ALGORITHM}\
        --datasets ${DATASET}\
-       --n_hparams 30\
+       --n_hparams 20\
        --n_trials 1\
        --skip_confirmation\
        --single_test_envs

@@ -226,6 +226,7 @@ if __name__ == "__main__":
             pass
         SELECTION_METHODS = [
             model_selection.IIDAccuracySelectionMethod,
+            model_selection.LastCheckpointIIDSelectionMethod,
             model_selection.IIDTopAccThenMinECESelectionMethod,
         ]
         # Include shuffled-input selectors by default

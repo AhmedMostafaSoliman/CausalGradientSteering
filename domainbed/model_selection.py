@@ -167,6 +167,40 @@ class LeaveOneOutSelectionMethod(SelectionMethod):
             return step_accs.argmax('val_acc')
         else:
             return None
+class LastCheckpointIIDSelectionMethod(SelectionMethod):
+    """Pick the last checkpoint (no early stopping), scoring with IID val split.
+
+    - Chooses the record with the largest step among those with a single test_env.
+    - Validation score: mean of env{i}_out_acc for i != test_env (IID train envs).
+    - Test score: env{test_env}_in_acc.
+    """
+    name = "last checkpoint (IID val split)"
+
+    @classmethod
+    def run_acc(self, run_records):
+        test_records = get_test_records(run_records)
+        if not len(test_records):
+            return None
+        chosen_record = test_records.sorted(lambda r: r['step'])[-1]
+        test_env = chosen_record['args']['test_envs'][0]
+        val_env_keys = []
+        for i in itertools.count():
+            key = f'env{i}_out_acc'
+            if key not in chosen_record:
+                break
+            if i != test_env:
+                val_env_keys.append(key)
+        if not val_env_keys:
+            return None
+        val_acc = float(np.mean([chosen_record[k] for k in val_env_keys]))
+        test_acc = chosen_record[f'env{test_env}_in_acc']
+        return {
+            'val_acc': val_acc,
+            'test_acc': test_acc
+        }
+
+    # Note: no per-step cross-validation; we simply pick the record with
+    # the largest step within the run (see run_acc above).
 
 
 class IIDTopAccThenMinECESelectionMethod(SelectionMethod):
