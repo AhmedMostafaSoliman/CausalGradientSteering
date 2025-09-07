@@ -134,7 +134,10 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerSchedule(Algorithm):
         # Allow runtime updates from a scheduler by keeping this mutable
         self.shuffle_patch_size = hparams["shuffle_patch_size"]
         self.shuffle_patch_every = hparams["shuffle_patch_every"]
+        # Always use center shuffle for simplicity
         self.shuffle_fn = shuffle_center_patches
+        # Center crop ratio (can be scheduled)
+        self.center_crop_ratio = hparams.get("center_crop_ratio_start", hparams.get("center_crop_ratio", 0.6))
         self.dot_prod_thresh = hparams.get("dot_prod_thresh", 0.3)
 
 
@@ -162,8 +165,12 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerSchedule(Algorithm):
                     orig_grads_list.append(None)
             
             self.optimizer.zero_grad()
-            # Use the (possibly scheduled) patch size
-            all_x_shuff = self.shuffle_fn(all_x, patch_size=self.shuffle_patch_size)
+            # Use the (possibly scheduled) patch size and center crop ratio
+            all_x_shuff = self.shuffle_fn(
+                all_x,
+                center_crop_ratio=self.center_crop_ratio,
+                patch_size=self.shuffle_patch_size,
+            )
             t_sh = self.predict(all_x_shuff)
             loss_shuff = F.cross_entropy(t_sh, all_y)
             loss_shuff.backward()
@@ -237,6 +244,11 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerSchedule(Algorithm):
     # Optional helper for external schedulers
     def set_shuffle_patch_size(self, new_size: int):
         self.shuffle_patch_size = int(new_size)
+    # Optional helpers for external schedulers
+    def set_center_crop_ratio(self, new_ratio: float):
+        self.center_crop_ratio = float(new_ratio)
+    def set_grad_inhib_strength(self, new_strength: float):
+        self.grad_inhib_strength = float(new_strength)
     
 
 
@@ -271,6 +283,8 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerScheduleSGD(Algorithm):
         self.shuffle_patch_size = hparams["shuffle_patch_size"]
         self.shuffle_patch_every = hparams["shuffle_patch_every"]
         self.shuffle_fn = shuffle_center_patches
+        # Center crop ratio (can be scheduled)
+        self.center_crop_ratio = hparams.get("center_crop_ratio_start", hparams.get("center_crop_ratio", 0.6))
         self.dot_prod_thresh = hparams.get("dot_prod_thresh", 0.3)
 
 
@@ -298,8 +312,12 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerScheduleSGD(Algorithm):
                     orig_grads_list.append(None)
             
             self.optimizer.zero_grad()
-            # Use the (possibly scheduled) patch size
-            all_x_shuff = self.shuffle_fn(all_x, patch_size=self.shuffle_patch_size)
+            # Use the (possibly scheduled) patch size and center crop ratio
+            all_x_shuff = self.shuffle_fn(
+                all_x,
+                center_crop_ratio=self.center_crop_ratio,
+                patch_size=self.shuffle_patch_size,
+            )
             t_sh = self.predict(all_x_shuff)
             loss_shuff = F.cross_entropy(t_sh, all_y)
             loss_shuff.backward()
@@ -377,6 +395,10 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerScheduleSGD(Algorithm):
     # Optional helper for external schedulers
     def set_shuffle_patch_size(self, new_size: int):
         self.shuffle_patch_size = int(new_size)
+    def set_center_crop_ratio(self, new_ratio: float):
+        self.center_crop_ratio = float(new_ratio)
+    def set_grad_inhib_strength(self, new_strength: float):
+        self.grad_inhib_strength = float(new_strength)
     
 
 
@@ -408,6 +430,8 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerScheduleAdamW(Algorithm):
         self.shuffle_patch_size = hparams["shuffle_patch_size"]
         self.shuffle_patch_every = hparams["shuffle_patch_every"]
         self.shuffle_fn = shuffle_center_patches
+        # Center crop ratio (can be scheduled)
+        self.center_crop_ratio = hparams.get("center_crop_ratio_start", hparams.get("center_crop_ratio", 0.6))
         self.dot_prod_thresh = hparams.get("dot_prod_thresh", 0.3)
 
 
@@ -435,8 +459,12 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerScheduleAdamW(Algorithm):
                     orig_grads_list.append(None)
             
             self.optimizer.zero_grad()
-            # Use the (possibly scheduled) patch size
-            all_x_shuff = self.shuffle_fn(all_x, patch_size=self.shuffle_patch_size)
+            # Use the (possibly scheduled) patch size and center crop ratio
+            all_x_shuff = self.shuffle_fn(
+                all_x,
+                center_crop_ratio=self.center_crop_ratio,
+                patch_size=self.shuffle_patch_size,
+            )
             t_sh = self.predict(all_x_shuff)
             loss_shuff = F.cross_entropy(t_sh, all_y)
             loss_shuff.backward()
@@ -513,4 +541,8 @@ class ERM_GRAD_INHIB_FAST_dp_thresh_layerScheduleAdamW(Algorithm):
     # Optional helper for external schedulers
     def set_shuffle_patch_size(self, new_size: int):
         self.shuffle_patch_size = int(new_size)
+    def set_center_crop_ratio(self, new_ratio: float):
+        self.center_crop_ratio = float(new_ratio)
+    def set_grad_inhib_strength(self, new_strength: float):
+        self.grad_inhib_strength = float(new_strength)
     

@@ -189,18 +189,44 @@ if __name__ == "__main__":
     n_steps = args.steps or dataset.N_STEPS
     checkpoint_freq = args.checkpoint_freq or dataset.CHECKPOINT_FREQ
 
-    # Simple uniform difficulty schedule for shuffle_patch_size: 1 -> 2 -> 4
-    # Applied across thirds of the total training steps.
-    first_boundary = n_steps // 3
-    second_boundary = (2 * n_steps) // 3
+    # Cosine schedules for difficulty progression
+    # Accept start/end from hparams with sensible defaults
+    import math
 
-    def schedule_patch_size(step_idx: int) -> int:
-        if step_idx < first_boundary:
-            return 1
-        elif step_idx < second_boundary:
-            return 2
+    def cos_interp(start: float, end: float, s: float) -> float:
+        # s in [0,1]
+        return end + (start - end) * 0.5 * (1 + math.cos(math.pi * s))
+
+    # Full-course schedule by default
+    sched_start_pct = float(hparams.get('sched_start_pct', 0.0))
+    sched_end_pct = float(hparams.get('sched_end_pct', 1.0))
+    sched_start_step = int(sched_start_pct * n_steps)
+    sched_end_step = max(int(sched_end_pct * n_steps), sched_start_step + 1)
+
+    # Read ranges
+    ps_start = float(hparams.get('shuffle_patch_size_start', 1))
+    ps_end = float(hparams.get('shuffle_patch_size_end', 8))
+    crop_start = float(hparams.get('center_crop_ratio_start', 1.0))
+    crop_end = float(hparams.get('center_crop_ratio_end', 0.5))
+    gamma_start = float(hparams.get('grad_inhib_strength_start', 1.0))
+    gamma_end = float(hparams.get('grad_inhib_strength_end', 0.2))
+
+    # Helper to snap patch size to nearest of {1,2,4,8}
+    def snap_patch_size(v: float) -> int:
+        candidates = [1, 2, 4, 8]
+        return int(min(candidates, key=lambda c: abs(c - v)))
+
+    def schedule_values(step_idx: int):
+        if step_idx <= sched_start_step:
+            s = 0.0
+        elif step_idx >= sched_end_step:
+            s = 1.0
         else:
-            return 4
+            s = (step_idx - sched_start_step) / (sched_end_step - sched_start_step)
+        ps_val = snap_patch_size(cos_interp(ps_start, ps_end, s))
+        crop_val = cos_interp(crop_start, crop_end, s)
+        gamma_val = cos_interp(gamma_start, gamma_end, s)
+        return ps_val, crop_val, gamma_val
 
     def save_checkpoint(filename):
         if args.skip_model_save:
@@ -226,13 +252,23 @@ if __name__ == "__main__":
                 for x,_ in next(uda_minibatches_iterator)]
         else:
             uda_device = None
-        # Apply scheduled difficulty (increase patch size uniformly: 1 -> 2 -> 4)
+        # Apply scheduled difficulty using cosine schedules
         try:
-            new_ps = schedule_patch_size(step)
+            new_ps, new_crop, new_gamma = schedule_values(step)
             if hasattr(algorithm, 'set_shuffle_patch_size'):
                 algorithm.set_shuffle_patch_size(new_ps)
             elif hasattr(algorithm, 'shuffle_patch_size'):
                 setattr(algorithm, 'shuffle_patch_size', new_ps)
+
+            if hasattr(algorithm, 'set_center_crop_ratio'):
+                algorithm.set_center_crop_ratio(new_crop)
+            elif hasattr(algorithm, 'center_crop_ratio'):
+                setattr(algorithm, 'center_crop_ratio', new_crop)
+
+            if hasattr(algorithm, 'set_grad_inhib_strength'):
+                algorithm.set_grad_inhib_strength(new_gamma)
+            elif hasattr(algorithm, 'grad_inhib_strength'):
+                setattr(algorithm, 'grad_inhib_strength', new_gamma)
         except Exception:
             pass
 
@@ -250,6 +286,15 @@ if __name__ == "__main__":
 
             for key, val in checkpoint_vals.items():
                 results[key] = np.mean(val)
+
+            # Log current scheduled values for visibility
+            try:
+                cur_ps, cur_crop, cur_gamma = schedule_values(step)
+                results['sched_patch_size'] = cur_ps
+                results['sched_center_crop'] = cur_crop
+                results['sched_grad_inhib'] = cur_gamma
+            except Exception:
+                pass
 
             evals = zip(eval_loader_names, eval_loaders, eval_weights)
             for name, loader, weights in evals:

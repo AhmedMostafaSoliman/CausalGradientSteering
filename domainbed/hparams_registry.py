@@ -182,6 +182,19 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('shuffle_fn', 'shuffle_center_patches', lambda r : r.choice(['shuffle_center_patches']))
         _hparam('center_crop_ratio', 0.6, lambda r : r.choice([0.5,0.6,0.7,0.8,0.9,1]))
         _hparam('dot_prod_thresh', 0.3, lambda r : r.choice([0,0.1,0.2,0.3,0.4]))
+        # Cosine schedule endpoints (defaults unchanged). Random ranges chosen to preserve monotonicity.
+        # - Patch size: start in {1,2,4}, end in {4,8} -> ensures end >= start for all draws.
+        _hparam('shuffle_patch_size_start', 1, lambda r: int(r.choice([1, 1, 2, 4])))
+        _hparam('shuffle_patch_size_end', 8, lambda r: int(r.choice([4, 8, 8])))
+        # - Center crop ratio: start in [0.85, 1.0], end in [0.4, 0.8] -> end <= start always.
+        _hparam('center_crop_ratio_start', 1.0, lambda r: float(np.round(r.uniform(0.85, 1.0), 2)))
+        _hparam('center_crop_ratio_end', 0.5, lambda r: float(np.round(r.uniform(0.4, 0.8), 2)))
+        # - Grad inhib strength: start in [0.7, 1.0], end in [0.2, 0.6] -> end <= start always.
+        _hparam('grad_inhib_strength_start', 1.0, lambda r: float(np.round(r.uniform(0.7, 1.0), 2)))
+        _hparam('grad_inhib_strength_end', 0.2, lambda r: float(np.round(r.uniform(0.2, 0.6), 2)))
+        # - Schedule window: start in {0.0, 0.1, 0.2}, end in {0.8, 0.9, 1.0} -> end >= start always.
+        _hparam('sched_start_pct', 0.0, lambda r: float(np.round(r.choice([0.0, 0.1, 0.2]), 2)))
+        _hparam('sched_end_pct', 1.0, lambda r: float(np.round(r.choice([0.8, 0.9, 1.0]), 2)))
 
     if algorithm == "ADRMX":
         _hparam('cnt_lambda', 1.0, lambda r: r.choice([1.0]))
@@ -242,6 +255,9 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('weight_decay_g', 0., lambda r: 0.)
     elif algorithm in ['DANN', 'CDANN']:
         _hparam('weight_decay_g', 0., lambda r: 10**r.uniform(-6, -2))
+
+    # Return the built registry for this (algorithm, dataset)
+    return hparams
 
 
 def default_hparams(algorithm, dataset):

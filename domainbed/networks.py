@@ -10,8 +10,6 @@ import copy
 
 import timm
 
-from domainbed.models.lora.lora_util import inject_trainable_moe_kronecker_new, inject_trainable_moe_kronecker_inhib
-
 def remove_batch_norm_from_resnet(model):
     fuse = torch.nn.utils.fusion.fuse_conv_bn_eval
     model.eval()
