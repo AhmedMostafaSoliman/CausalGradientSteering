@@ -215,12 +215,12 @@ def _hparams(algorithm, dataset, random_seed):
         if algorithm == "ADRMX":
             _hparam('lr', 3e-3, lambda r: r.choice([5e-4, 1e-3, 2e-3, 3e-3]))
         else:
-            _hparam('lr', 1e-3, lambda r: 10**r.uniform(-4.5, -2.5))
+            _hparam('lr', 1e-3, lambda r: 1e-3)
     else:
         if algorithm == "ADRMX":
             _hparam('lr', 3e-5, lambda r: r.choice([2e-5, 3e-5, 4e-5, 5e-5]))
         else:
-            _hparam('lr', 5e-5, lambda r: 10**r.uniform(-5, -3.5))
+            _hparam('lr', 5e-5, lambda r: 5e-5)
 
     if dataset in SMALL_IMAGES:
         _hparam('weight_decay', 0., lambda r: 0.)
@@ -230,7 +230,7 @@ def _hparams(algorithm, dataset, random_seed):
     if dataset in SMALL_IMAGES:
         _hparam('batch_size', 64, lambda r: int(2**r.uniform(3, 9)))
     elif algorithm == 'ARM':
-        _hparam('batch_size', 8, lambda r: 8)
+        _hparam('batch_size', 8, lambda r: int(r.choice([8,16])))
     elif algorithm == 'RDM':
         if dataset in ['DomainNet', 'TerraIncognita']:
             _hparam('batch_size', 40, lambda r: int(r.uniform(30, 60)))
