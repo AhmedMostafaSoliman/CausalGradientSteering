@@ -5,3 +5,5 @@ __pycache__/
 *.txt
 *.jsonl
 results/*
+*.err
+*.out
