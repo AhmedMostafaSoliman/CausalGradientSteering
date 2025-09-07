@@ -194,6 +194,10 @@ if __name__ == "__main__":
     parser.add_argument("--input_dir", type=str, required=True)
     parser.add_argument("--latex", action="store_true")
     parser.add_argument("--auto_lr", action="store_true")
+    parser.add_argument("--ece_top_pct", type=float, default=20.0,
+                        help="Percentile of top validation-accuracy checkpoints to consider when using ECE-aware selection.")
+    parser.add_argument("--si_top_pct", type=float, default=20.0,
+                        help="Percentile of top validation-accuracy checkpoints to consider for shuffled-input selectors.")
     args = parser.parse_args()
 
     results_file = "results.tex" if args.latex else "results.txt"
@@ -215,11 +219,29 @@ if __name__ == "__main__":
     if args.auto_lr:
         SELECTION_METHODS = [model_selection.IIDAutoLRAccuracySelectionMethod]
     else:
+        # Allow configuration of ECE-aware selection method
+        try:
+            model_selection.IIDTopAccThenMinECESelectionMethod.TOP_PCT = float(args.ece_top_pct)
+        except Exception:
+            pass
         SELECTION_METHODS = [
             model_selection.IIDAccuracySelectionMethod,
+            model_selection.IIDTopAccThenMinECESelectionMethod,
+        ]
+        # Include shuffled-input selectors by default
+        try:
+            model_selection.IIDTopAccThenMinSICSelectionMethod.TOP_PCT = float(args.si_top_pct)
+            model_selection.IIDTopAccThenMaxSIESelectionMethod.TOP_PCT = float(args.si_top_pct)
+            model_selection.IIDTopAccThenMinSIKLSelectionMethod.TOP_PCT = float(args.si_top_pct)
+        except Exception:
+            pass
+        SELECTION_METHODS.extend([
+            model_selection.IIDTopAccThenMinSICSelectionMethod,
+            model_selection.IIDTopAccThenMaxSIESelectionMethod,
+            model_selection.IIDTopAccThenMinSIKLSelectionMethod,
             model_selection.LeaveOneOutSelectionMethod,
             model_selection.OracleSelectionMethod
-        ]
+        ])
 
     for selection_method in SELECTION_METHODS:
         if args.latex:

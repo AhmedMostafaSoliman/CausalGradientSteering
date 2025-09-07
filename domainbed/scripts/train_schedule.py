@@ -20,6 +20,12 @@ from domainbed import hparams_registry
 from domainbed import cgs_algorithms
 from domainbed.lib import misc
 from domainbed.lib.fast_data_loader import InfiniteDataLoader, FastDataLoader
+from domainbed.lib.calibration import (
+    compute_ece_from_logits,
+    maxprob_from_logits,
+    entropy_from_logits,
+    kl_to_uniform_from_logits,
+)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Domain generalization')
@@ -298,8 +304,121 @@ if __name__ == "__main__":
 
             evals = zip(eval_loader_names, eval_loaders, eval_weights)
             for name, loader, weights in evals:
+                # Accuracy (existing behavior)
                 acc = misc.accuracy(algorithm, loader, weights, device)
                 results[name+'_acc'] = acc
+
+                # ECE (new): compute only for in/out splits
+                if name.endswith('_in') or name.endswith('_out'):
+                    logits_list = []
+                    labels_list = []
+                    logits_shuf_list = []
+                    algorithm.eval()
+                    with torch.no_grad():
+                        for x, y in loader:
+                            x = x.to(device)
+                            y = y.to(device)
+                            p = algorithm.predict(x)
+                            logits_list.append(p.detach().cpu())
+                            labels_list.append(y.detach().cpu())
+
+                            # Also compute logits on shuffled/destroyed inputs
+                            # Determine shuffle function and params
+                            try:
+                                cur_ps, cur_crop, _ = schedule_values(step)
+                            except Exception:
+                                cur_ps = getattr(algorithm, 'shuffle_patch_size', 8)
+                                cur_crop = getattr(algorithm, 'center_crop_ratio', 0.6)
+                            shuf_fn = getattr(algorithm, 'shuffle_fn', None)
+                            if shuf_fn is None:
+                                shuf_fn = getattr(misc, 'shuffle_center_patches', None)
+                            if shuf_fn is not None:
+                                x_shuf = shuf_fn(x, center_crop_ratio=float(cur_crop), patch_size=int(cur_ps))
+                                p_shuf = algorithm.predict(x_shuf)
+                                logits_shuf_list.append(p_shuf.detach().cpu())
+                    algorithm.train()
+                    if logits_list:
+                        logits = torch.cat(logits_list, dim=0)
+                        labels = torch.cat(labels_list, dim=0)
+                        ece = compute_ece_from_logits(logits, labels, n_bins=15)
+                        results[name + '_ece'] = ece
+
+                    # Shuffled-input confidence metrics (if computed)
+                    if logits_shuf_list:
+                        logits_shuf = torch.cat(logits_shuf_list, dim=0)
+                        # SIC: mean max prob (lower is better)
+                        sic = float(maxprob_from_logits(logits_shuf).mean().item())
+                        results[name + '_sic'] = sic
+                        # SIE: mean entropy (higher is better)
+                        sie = float(entropy_from_logits(logits_shuf).mean().item())
+                        results[name + '_sie'] = sie
+                        # SI-KL: mean KL to uniform (lower is better)
+                        c_eff = logits_shuf.shape[1] if logits_shuf.ndim == 2 else None
+                        sikl = float(kl_to_uniform_from_logits(logits_shuf, num_classes=c_eff).mean().item())
+                        results[name + '_sikl'] = sikl
+
+            # Aggregates over environments
+            try:
+                n_envs = len(in_splits)
+                # avg_in_ece over all envs with in-split
+                in_eces = []
+                for i in range(n_envs):
+                    key = f'env{i}_in_ece'
+                    if key in results:
+                        in_eces.append(results[key])
+                if in_eces:
+                    results['avg_in_ece'] = float(np.mean(in_eces))
+
+                # avg_out_ece over all envs with out-split
+                out_eces = []
+                for i in range(n_envs):
+                    key = f'env{i}_out_ece'
+                    if key in results:
+                        out_eces.append(results[key])
+                if out_eces:
+                    results['avg_out_ece'] = float(np.mean(out_eces))
+
+                # worst-case aggregates (max ECE is worst)
+                if in_eces:
+                    results['worst_in_ece'] = float(np.max(in_eces))
+                if out_eces:
+                    results['worst_out_ece'] = float(np.max(out_eces))
+
+                # Validation ECE: average over training domains' out-splits (exclude test envs)
+                val_out_eces = []
+                for i in range(n_envs):
+                    if i in args.test_envs:
+                        continue
+                    key = f'env{i}_out_ece'
+                    if key in results:
+                        val_out_eces.append(results[key])
+                if val_out_eces:
+                    results['val_avg_ece'] = float(np.mean(val_out_eces))
+
+                # Aggregates for shuffled-input metrics
+                def _agg(prefix):
+                    in_vals, out_vals, val_out_vals = [], [], []
+                    for i in range(n_envs):
+                        kin = f'env{i}_in_{prefix}'
+                        kout = f'env{i}_out_{prefix}'
+                        if kin in results:
+                            in_vals.append(results[kin])
+                        if kout in results:
+                            out_vals.append(results[kout])
+                            if i not in args.test_envs:
+                                val_out_vals.append(results[kout])
+                    if in_vals:
+                        results[f'avg_in_{prefix}'] = float(np.mean(in_vals))
+                    if out_vals:
+                        results[f'avg_out_{prefix}'] = float(np.mean(out_vals))
+                    if val_out_vals:
+                        results[f'val_avg_{prefix}'] = float(np.mean(val_out_vals))
+
+                for pref in ['sic', 'sie', 'sikl']:
+                    _agg(pref)
+            except Exception:
+                # Be resilient to unexpected shapes/keys
+                pass
 
             results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
 
