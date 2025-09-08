@@ -22,5 +22,5 @@ python -m domainbed.scripts.sweep_schedule launch\
 
 
 python -m domainbed.scripts.collect_results_by_all_hparams\
-    --input_dir "${BASE_DIR}/results/${DATASET}/schedule_explore/${ALGORITHM}/${SWEEP}"\
+    --input_dir "results/${DATASET}/schedule_explore/${ALGORITHM}/${SWEEP}"\
     --algorithm ${ALGORITHM}
