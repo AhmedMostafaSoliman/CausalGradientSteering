@@ -69,7 +69,29 @@ class Algorithm(torch.nn.Module):
 
     def predict(self, x):
         raise NotImplementedError
-    
+
+class MovingAvg:
+    def __init__(self, network):
+        self.network = network
+        self.network_sma = copy.deepcopy(network)
+        self.network_sma.eval()
+        self.sma_start_iter = 100
+        self.global_iter = 0
+        self.sma_count = 0
+    def update_sma(self):
+        self.global_iter += 1
+        new_dict = {}
+        if self.global_iter>=self.sma_start_iter:
+            self.sma_count += 1
+            for (name,param_q), (_,param_k) in zip(self.network.state_dict().items(), self.network_sma.state_dict().items()):
+                if 'num_batches_tracked' not in name:
+                   new_dict[name] = ((param_k.data.detach().clone()* self.sma_count + param_q.data.detach().clone())/(1.+self.sma_count))
+        else:
+            for (name,param_q), (_,param_k) in zip(self.network.state_dict().items(), self.network_sma.state_dict().items()):
+                if 'num_batches_tracked' not in name:
+                    new_dict[name] = param_q.detach().data.clone()
+        self.network_sma.load_state_dict(new_dict)
+            
 class ERM(Algorithm):
     """
     Empirical Risk Minimization (ERM)
@@ -213,3 +235,147 @@ class ERMPlusPlus(Algorithm,ErmPlusPlusMovingAvg):
                      schedule = schedule[1:]
              return schedule
 
+    
+class ERM_GRAD_INHIB_FAST_conditional_normalized2_dp_thresh_layer(Algorithm, MovingAvg):
+    """
+    same as ERM_GRAD_INHIB_FAST_conditional, but with normalized 2 (a different normalization approach) gradients PER LAYER
+        new_grad = orig_grad - factor * shuff_grad
+        scale = orig_grad.norm() / (new_grad.norm() + 1e-8)
+        param.grad = scale * new_grad
+    
+    note here the dot product threshold is bigger than 0.3 not just 0
+    """
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        Algorithm.__init__(self, input_shape, num_classes, num_domains, hparams)
+        self.featurizer = networks.Featurizer(input_shape, self.hparams)
+        self.classifier = networks.Classifier(
+            self.featurizer.n_outputs,
+            num_classes,
+            self.hparams['nonlinear_classifier'])
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        self.optimizer = torch.optim.Adam(
+            self.network.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams["weight_decay"],
+        )
+        # SMA components
+        MovingAvg.__init__(self, self.network)
+        self.grad_inhib_strength = hparams["grad_inhib_strength"]
+        self.shuffle_patch_size = hparams["shuffle_patch_size"]
+        self.shuffle_patch_every = hparams["shuffle_patch_every"]
+        self.shuffle_fn = hparams["shuffle_fn"]
+        self.dot_prod_thresh = hparams.get("dot_prod_thresh", 0.3)
+        # convert the shuffle_fn string to a function
+        if self.shuffle_fn == 'shuffle_patches':
+            self.shuffle_fn = shuffle_patches
+        elif self.shuffle_fn == 'shuffle_center_patches':
+            self.shuffle_fn = shuffle_center_patches
+        elif self.shuffle_fn == 'replace_with_average_patch':
+            self.shuffle_fn = replace_with_average_patch
+        else:
+            self.shuffle_fn = globals()[hparams["shuffle_fn"]]
+
+        self.update_step=0
+        import math
+        self.ret_loss = math.inf
+
+    def update(self, minibatches, unlabeled=None):        
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+
+        if self.update_step % self.shuffle_patch_every == 0 and self.update_step != 0:
+            # Train on the live network (not SMA)
+            t = self.network(all_x)
+
+            loss = F.cross_entropy(t, all_y)
+            self.optimizer.zero_grad()
+            loss.backward()
+
+            # store original grad
+            orig_grads_list = []
+            for p in self.network.parameters():
+                if p.grad is not None:
+                    orig_grads_list.append(p.grad.clone())
+                else:
+                    orig_grads_list.append(None)
+            
+            self.optimizer.zero_grad()
+            all_x_shuff = self.shuffle_fn(all_x, patch_size=self.shuffle_patch_size)
+            # Train on the live network for shuffled pass
+            t_sh = self.network(all_x_shuff)
+            loss_shuff = F.cross_entropy(t_sh, all_y)
+            loss_shuff.backward()
+            
+            # Store shuffled gradients
+            shuff_grads_list = []
+            for p in self.network.parameters():
+                if p.grad is not None:
+                    shuff_grads_list.append(p.grad.clone())
+                else:
+                    shuff_grads_list.append(None)
+
+            # Process gradients layer by layer
+            for p_idx, p in enumerate(self.network.parameters()):
+                orig_grad_layer = orig_grads_list[p_idx]
+                # p.grad currently holds the gradient from loss_shuff.backward()
+                # which is shuff_grads_list[p_idx]
+                shuff_grad_layer = p.grad 
+
+                if orig_grad_layer is not None and shuff_grad_layer is not None:
+                    orig_flat_layer = orig_grad_layer.flatten()
+                    shuff_flat_layer = shuff_grad_layer.flatten()
+
+                    dot_prod_layer = torch.dot(orig_flat_layer, shuff_flat_layer)
+                    shuff_norm_sq_layer = torch.sum(shuff_flat_layer * shuff_flat_layer)
+                    
+                    projection_scalar_layer = dot_prod_layer / (shuff_norm_sq_layer + 1e-8)
+
+                    if dot_prod_layer > self.dot_prod_thresh:
+                        factor_layer = self.grad_inhib_strength * projection_scalar_layer
+                    else:
+                        factor_layer = 0
+                    
+                    # Calculate new gradient for the layer
+                    new_grad_layer = orig_grad_layer - factor_layer * shuff_grad_layer
+                    
+                    # Layer-specific normalization
+                    orig_norm_layer = orig_grad_layer.norm()
+                    new_grad_norm_val_layer = new_grad_layer.norm()
+                    
+                    # Avoid division by zero if new_grad_norm_val_layer is close to zero
+                    if new_grad_norm_val_layer > 1e-8:
+                        scale_layer = orig_norm_layer / new_grad_norm_val_layer
+                        p.grad = scale_layer * new_grad_layer
+                    else:
+                        # new_grad is effectively zero.
+                        p.grad = torch.zeros_like(orig_grad_layer)
+
+                elif orig_grad_layer is not None:
+                    # Shuffled gradient is None for this layer, use original gradient
+                    p.grad = orig_grad_layer
+                # Else (orig_grad_layer is None):
+                # p.grad remains as it is (which is shuff_grad_layer, possibly None).
+                # This is correct as this parameter was not involved in the original loss.
+                                    
+            self.optimizer.step()
+            self.ret_loss = loss.item()
+        else:
+            # Standard supervised step on live network
+            t = self.network(all_x)
+
+            loss = F.cross_entropy(t, all_y)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step() 
+            self.ret_loss = loss.item()
+     
+        self.update_step += 1
+        # Update SMA after updating live weights
+        self.update_sma()
+        return {"loss": self.ret_loss}
+        
+    def predict(self, x):
+        # Use the averaged model for evaluation
+        self.network_sma.eval()
+        return self.network_sma(x)

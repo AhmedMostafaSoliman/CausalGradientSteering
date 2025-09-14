@@ -156,7 +156,8 @@ if __name__ == "__main__":
         weights=env_weights,
         batch_size=hparams['batch_size'],
         num_workers=dataset.N_WORKERS)
-        for i, (env, env_weights) in enumerate(uda_splits)]
+        for i, (env, env_weights) in enumerate(uda_splits)
+        if i in args.test_envs]
 
     eval_loaders = [FastDataLoader(
         dataset=env,
@@ -172,7 +173,8 @@ if __name__ == "__main__":
         for i in range(len(uda_splits))]
 
     algorithm_class = algorithms.get_algorithm_class(args.algorithm)
-    algorithm = algorithm_class(dataset.input_shape, dataset.num_classes, len(dataset) - len(args.test_envs), hparams)
+    algorithm = algorithm_class(dataset.input_shape, dataset.num_classes,
+        len(dataset) - len(args.test_envs), hparams)
 
     if algorithm_dict is not None:
         algorithm.load_state_dict(algorithm_dict)
@@ -203,6 +205,7 @@ if __name__ == "__main__":
 
 
     last_results_keys = None
+    best_acc = -float('inf')
     for step in range(start_step, n_steps):
         step_start_time = time.time()
         minibatches_device = [(x.to(device), y.to(device))
@@ -232,14 +235,32 @@ if __name__ == "__main__":
                 acc = misc.accuracy(algorithm, loader, weights, device)
                 results[name+'_acc'] = acc
 
+            ##========
+            agg_val_acc, nagg_val_acc = 0, 0
+            for name in results.keys():
+                if 'acc' in name and 'out' in name and int(name.split('env')[1].split('_')[0]) not in args.test_envs:
+                    agg_val_acc += results[name]
+                    nagg_val_acc += 1.
+            agg_val_acc /= (nagg_val_acc + 1e-9)
+            results['agg_val_acc'] = agg_val_acc
+
+            agg_test_acc, nagg_test_acc = 0, 0
+            for name in results.keys():
+                if 'acc' in name and name !='agg_val_acc' and int(name.split('env')[1].split('_')[0]) in args.test_envs:
+                    agg_test_acc += results[name]
+                    nagg_test_acc += 1.
+            agg_test_acc /= (nagg_test_acc + 1e-9)
+            results['agg_test_acc'] = agg_test_acc
+            ##========
+
             results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
 
             results_keys = sorted(results.keys())
             if results_keys != last_results_keys:
-                misc.print_row(results_keys, colwidth=12)
+                misc.print_row(results_keys, colwidth=8)
                 last_results_keys = results_keys
             misc.print_row([results[key] for key in results_keys],
-                colwidth=12)
+                colwidth=8)
 
             results.update({
                 'hparams': hparams,
@@ -256,6 +277,9 @@ if __name__ == "__main__":
 
             if args.save_model_every_checkpoint:
                 save_checkpoint(f'model_step{step}.pkl')
+            if best_acc<agg_val_acc:
+                best_acc = agg_val_acc
+                save_checkpoint('best_model.pkl')
 
     save_checkpoint('model.pkl')
 

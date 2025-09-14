@@ -388,6 +388,11 @@ if __name__ == "__main__":
             model_selection.IIDAccuracySelectionMethod,
             model_selection.LeaveOneOutSelectionMethod,
             model_selection.OracleSelectionMethod,
+            model_selection.LastCheckpointIIDSelectionMethod,
+            model_selection.IIDTopAccThenMaxSIESelectionMethod,
+            model_selection.IIDTopAccThenMinECESelectionMethod,
+            model_selection.IIDTopAccThenMinSIKLSelectionMethod,
+            model_selection.IIDTopAccThenMinSICSelectionMethod
         ]
 
     # For each group of records, print results tables

@@ -213,7 +213,7 @@ class IIDTopAccThenMinECESelectionMethod(SelectionMethod):
     Control the percentile threshold via class attribute TOP_PCT (0-100).
     """
     name = "training-domain: top-pct-acc then min-ECE"
-    TOP_PCT = 20.0  # percent of top val-acc checkpoints to consider
+    TOP_PCT = 10.0  # percent of top val-acc checkpoints to consider
 
     @classmethod
     def _step_metrics(self, record):
@@ -297,7 +297,7 @@ class _TopAccThenSignalBase(SelectionMethod):
     NAME = ""
     SIGNAL_KEY = ""
     DIRECTION = "min"
-    TOP_PCT = 20.0
+    TOP_PCT = 10.0
 
     @classmethod
     def _step_metrics(self, record):
