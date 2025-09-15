@@ -92,7 +92,7 @@ def CGSFactory(BaseAlgoClass):
 
             MovingAvg.__init__(self, self.network)
             self.update_step = 0
-            self._last_loss = float("inf")
+            self.ret_loss = float("inf")
 
         def update(self, minibatches, unlabeled=None):
             all_x = torch.cat([x for x, y in minibatches])
