@@ -52,9 +52,6 @@ def _hparams(algorithm, dataset, random_seed):
     _hparam('resnet18', False, lambda r: False)
     _hparam('resnet50_augmix', True, lambda r: True)
     _hparam('dinov2', False, lambda r: False)
-    _hparam('dinov2_inhib', False, lambda r: False)
-    _hparam('dinov2_inhib_base', False, lambda r: False)
-    _hparam('clip_inhib', False, lambda r: False)
     _hparam('vit', False, lambda r: False)
     _hparam('vit_attn_tune', False, lambda r: False)
     _hparam('freeze_bn', False, lambda r: False)
@@ -103,14 +100,14 @@ def _hparams(algorithm, dataset, random_seed):
             
         _hparam('rdm_lr', 1.5e-5, lambda r: r.uniform(8e-6, 2e-5))
 
-    elif algorithm == "RSC":
+    elif "RSC" in algorithm:
         _hparam('rsc_f_drop_factor', 1/3, lambda r: r.uniform(0, 0.5))
         _hparam('rsc_b_drop_factor', 1/3, lambda r: r.uniform(0, 0.5))
 
-    elif algorithm == "SagNet":
+    elif "SagNet" in algorithm:
         _hparam('sag_w_adv', 0.1, lambda r: 10**r.uniform(-2, 1))
 
-    elif algorithm == "IRM":
+    elif "IRM" in algorithm:
         _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
         _hparam('irm_penalty_anneal_iters', 500,
                 lambda r: int(10**r.uniform(0, 4)))
@@ -118,20 +115,20 @@ def _hparams(algorithm, dataset, random_seed):
     elif algorithm == "Mixup":
         _hparam('mixup_alpha', 0.2, lambda r: 10**r.uniform(-1, 1))
 
-    elif algorithm == "GroupDRO":
+    elif "GroupDRO" in algorithm:
         _hparam('groupdro_eta', 1e-2, lambda r: 10**r.uniform(-3, -1))
 
-    elif algorithm == "MMD" or algorithm == "CORAL" or algorithm == "CausIRL_CORAL" or algorithm == "CausIRL_MMD":
+    elif "MMD" in algorithm or "CORAL" in algorithm or "CausIRL_CORAL" in algorithm or "CausIRL_MMD" in algorithm:
         _hparam('mmd_gamma', 1., lambda r: 10**r.uniform(-1, 1))
 
-    elif algorithm == "MLDG":
+    elif "MLDG" in algorithm:
         _hparam('mldg_beta', 1., lambda r: 10**r.uniform(-1, 1))
         _hparam('n_meta_test', 2, lambda r:  r.choice([1, 2]))
 
-    elif algorithm == "MTL":
+    elif "MTL" in algorithm:
         _hparam('mtl_ema', .99, lambda r: r.choice([0.5, 0.9, 0.99, 1.]))
 
-    elif algorithm == "VREx":
+    elif "VREx" in algorithm:
         _hparam('vrex_lambda', 1e1, lambda r: 10**r.uniform(-1, 5))
         _hparam('vrex_penalty_anneal_iters', 500,
                 lambda r: int(10**r.uniform(0, 4)))
@@ -196,13 +193,13 @@ def _hparams(algorithm, dataset, random_seed):
     elif algorithm == 'ERMPlusPlus':
         _hparam('linear_lr', 5e-5, lambda r: 10**r.uniform(-5, -3.5))
 
-    elif "GRAD_INHIB" in algorithm:
-        _hparam('grad_inhib_strength', 0.1, lambda r: r.choice([0.6,0.7,0.8,0.9,1]))
-        _hparam('shuffle_patch_size', 8, lambda r : int(r.choice([1,2,4,8])))
-        _hparam('shuffle_patch_every', 400, lambda r : int(r.choice([100,200,300,400,500,600,700,800])))
+    elif "GRAD_INHIB" in algorithm or "CGS" in algorithm:
+        _hparam('grad_inhib_strength', 0.5, lambda r: r.choice([0.6,0.7,0.8,0.9,1]))
+        _hparam('shuffle_patch_size', 2, lambda r : int(r.choice([1,2,4,8])))
+        _hparam('shuffle_patch_every', 100, lambda r : int(r.choice([100,200,300,400,500,600,700,800])))
         _hparam('shuffle_fn', 'shuffle_center_patches', lambda r : r.choice(['shuffle_center_patches']))
         _hparam('center_crop_ratio', 0.6, lambda r : r.choice([0.5,0.6,0.7,0.8,0.9,1]))
-        _hparam('dot_prod_thresh', 0.3, lambda r : r.choice([0,0.1,0.2,0.3,0.4]))
+        _hparam('dot_prod_thresh', 0.2, lambda r : r.choice([0,0.1,0.2,0.3,0.4]))
         # Cosine schedule endpoints (defaults unchanged). Random ranges chosen to preserve monotonicity.
         # - Patch size: start in {1,2,4}, end in {4,8} -> ensures end >= start for all draws.
         _hparam('shuffle_patch_size_start', 1, lambda r: int(r.choice([1, 2, 4])))

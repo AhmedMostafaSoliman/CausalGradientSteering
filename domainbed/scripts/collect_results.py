@@ -219,30 +219,12 @@ if __name__ == "__main__":
     if args.auto_lr:
         SELECTION_METHODS = [model_selection.IIDAutoLRAccuracySelectionMethod]
     else:
-        # Allow configuration of ECE-aware selection method
-        try:
-            model_selection.IIDTopAccThenMinECESelectionMethod.TOP_PCT = float(args.ece_top_pct)
-        except Exception:
-            pass
         SELECTION_METHODS = [
             model_selection.IIDAccuracySelectionMethod,
             model_selection.LastCheckpointIIDSelectionMethod,
-            model_selection.IIDTopAccThenMinECESelectionMethod,
+            #model_selection.LeaveOneOutSelectionMethod,
+            model_selection.OracleSelectionMethod,
         ]
-        # Include shuffled-input selectors by default
-        try:
-            model_selection.IIDTopAccThenMinSICSelectionMethod.TOP_PCT = float(args.si_top_pct)
-            model_selection.IIDTopAccThenMaxSIESelectionMethod.TOP_PCT = float(args.si_top_pct)
-            model_selection.IIDTopAccThenMinSIKLSelectionMethod.TOP_PCT = float(args.si_top_pct)
-        except Exception:
-            pass
-        SELECTION_METHODS.extend([
-            model_selection.IIDTopAccThenMinSICSelectionMethod,
-            model_selection.IIDTopAccThenMaxSIESelectionMethod,
-            model_selection.IIDTopAccThenMinSIKLSelectionMethod,
-            model_selection.LeaveOneOutSelectionMethod,
-            model_selection.OracleSelectionMethod
-        ])
 
     for selection_method in SELECTION_METHODS:
         if args.latex:
