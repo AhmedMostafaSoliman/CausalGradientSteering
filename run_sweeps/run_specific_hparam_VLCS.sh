@@ -8,12 +8,12 @@ SHUFFLE_PATCH_SIZE=2
 SHUFFLE_PATCH_EVERY=100
 SHUFFLE_FN="shuffle_center_patches"
 GRAD_INHIB_STRENGTH=0.5
+DOT_PROD_THRESH=0.2
 # other hparams
 BATCH_SIZE=32
-WEIGHT_DECAY=0.0003
+WEIGHT_DECAY=0.0009
 LR=1e-6
 RESNET_DROPOUT=0
-DOT_PROD_THRESH=0.2
 
 # Create output directory name with hyperparameter values
 OUTPUT_DIR="/home/ahmedm04/projects/CGS/results/${DATASET}/final/${ALGORITHM}/shuffle_patch_size=${SHUFFLE_PATCH_SIZE}__shuffle_patch_every=${SHUFFLE_PATCH_EVERY}__shuffle_fn=${SHUFFLE_FN}__grad_inhib_strength=${GRAD_INHIB_STRENGTH}__batch_size=${BATCH_SIZE}__weight_decay=${WEIGHT_DECAY}__lr=${LR}__resnet_dropout=${RESNET_DROPOUT}__dot_prod_thresh=${DOT_PROD_THRESH}"

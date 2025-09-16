@@ -8,30 +8,30 @@ SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 BASE_DIR="$( dirname "$SCRIPT_DIR" )"
 
 # Define hyperparameters and config
-ALGORITHM="ERM_GRAD_INHIB_FAST_dp_thresh_layerSchedule"
-DATASET="PACS"   # 4 domains; sweep will iterate test envs
+ALGORITHM="ERM_GRAD_INHIB_FAST_dp_thresh_layerScheduleSMA"
+DATASET="VLCS"   # 4 domains; sweep will iterate test envs
 
 # Schedule ranges (cosine). Defaults: ps 1->8, crop 1.0->0.5, gamma 1.0->0.2
-PS_START=1
+PS_START=4
 PS_END=8
-CROP_START=1.0
+CROP_START=0.8
 CROP_END=0.7
-GAMMA_START=0.6
-GAMMA_END=0.3
-SCHED_START_PCT=0.2
-SCHED_END_PCT=1.0
+GAMMA_START=0.8
+GAMMA_END=0.4
+SCHED_START_PCT=0.1
+SCHED_END_PCT=0.8
 
 # Base hparams
 SHUFFLE_PATCH_SIZE=${PS_START}   # initial; scheduler will update
-SHUFFLE_PATCH_EVERY=200
+SHUFFLE_PATCH_EVERY=300
 SHUFFLE_FN="shuffle_center_patches"
 GRAD_INHIB_STRENGTH=${GAMMA_START}
 DOT_PRODUCT_THRESH=0.4
 
 # Other hparams
-BATCH_SIZE=40
+BATCH_SIZE=8
 WEIGHT_DECAY=0.0003 #0.0005
-LR=1e-5 #0.003
+LR=1e-05 #0.003
 RESNET_DROPOUT=0.25
 
 OUTPUT_DIR="${BASE_DIR}/results/${DATASET}/schedule_sweep/${ALGORITHM}/ps=${PS_START}to${PS_END}__crop=${CROP_START}to${CROP_END}__gamma=${GAMMA_START}to${GAMMA_END}__sched=${SCHED_START_PCT}to${SCHED_END_PCT}__every=${SHUFFLE_PATCH_EVERY}__fn=${SHUFFLE_FN}__dotth=${DOT_PRODUCT_THRESH}__bs=${BATCH_SIZE}__wd=${WEIGHT_DECAY}__lr=${LR}__dropout=${RESNET_DROPOUT}"

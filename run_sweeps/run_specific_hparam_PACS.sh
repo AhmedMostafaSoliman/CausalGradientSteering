@@ -28,7 +28,7 @@ python -m domainbed.scripts.sweep \
     --algorithms ${ALGORITHM} \
     --n_hparams_from 0 \
     --n_hparams 1 \
-    --n_trials 1 \
+    --n_trials 3 \
     --output_dir ${OUTPUT_DIR} \
     --data_dir=/home/ahmedm04/dg_datasets\
     --command_launcher multi_gpu \

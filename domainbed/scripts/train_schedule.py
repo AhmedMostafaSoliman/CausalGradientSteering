@@ -249,6 +249,8 @@ if __name__ == "__main__":
 
 
     last_results_keys = None
+    # Track best aggregated validation accuracy (for SMA/best-model saving)
+    best_acc = float('-inf')
     for step in range(start_step, n_steps):
         step_start_time = time.time()
         minibatches_device = [(x.to(device), y.to(device))
@@ -418,6 +420,46 @@ if __name__ == "__main__":
                     _agg(pref)
             except Exception:
                 # Be resilient to unexpected shapes/keys
+                pass
+
+            # Compute aggregated accuracies and track best SMA model
+            try:
+                # Aggregate validation accuracy over non-test envs' out-splits
+                agg_val_acc, nagg_val_acc = 0.0, 0.0
+                for k in list(results.keys()):
+                    if (
+                        ('acc' in k) and ('out' in k) and
+                        (k.startswith('env'))
+                    ):
+                        try:
+                            env_idx = int(k.split('env')[1].split('_')[0])
+                        except Exception:
+                            continue
+                        if env_idx not in args.test_envs:
+                            agg_val_acc += float(results[k])
+                            nagg_val_acc += 1.0
+                agg_val_acc /= (nagg_val_acc + 1e-9)
+                results['agg_val_acc'] = float(agg_val_acc)
+
+                # Aggregate test accuracy over specified test envs (all splits)
+                agg_test_acc, nagg_test_acc = 0.0, 0.0
+                for k in list(results.keys()):
+                    if ('acc' in k) and (k != 'agg_val_acc') and (k.startswith('env')):
+                        try:
+                            env_idx = int(k.split('env')[1].split('_')[0])
+                        except Exception:
+                            continue
+                        if env_idx in args.test_envs:
+                            agg_test_acc += float(results[k])
+                            nagg_test_acc += 1.0
+                agg_test_acc /= (nagg_test_acc + 1e-9)
+                results['agg_test_acc'] = float(agg_test_acc)
+
+                # Save best SMA model checkpoint based on aggregated val acc
+                if agg_val_acc > best_acc and not args.skip_model_save:
+                    best_acc = agg_val_acc
+                    save_checkpoint('best_model_agg.pkl')
+            except Exception:
                 pass
 
             results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
