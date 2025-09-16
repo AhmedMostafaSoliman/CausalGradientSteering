@@ -4,6 +4,7 @@ __pycache__/
 *.pkl
 *.txt
 *.jsonl
-results/*
+results*/*
 *.err
 *.out
+selection_algos_gym/*
