@@ -80,10 +80,18 @@ class MovingAvg:
         self.network_sma.load_state_dict(new_dict)
 
 
-def CGSFactory(BaseAlgoClass):
+def CGSFactory(BaseAlgoClass, net: str = "network"):
     class _CGS(BaseAlgoClass, MovingAvg):
         def __init__(self, input_shape, num_classes, num_domains, hparams):
             super().__init__(input_shape, num_classes, num_domains, hparams)
+
+            # record which attribute the base predict() uses (e.g., "network", "xyznet", ...)
+            self._cgs_target_attr = net
+
+            # keep update() logic unchanged by ensuring self.network points to the target
+            if net != "network":
+                setattr(self, "network", getattr(self, net))  # will raise if wrong name
+
             self.grad_inhib_strength = GRAD_INHIB_STRENGTH
             self.shuffle_patch_size  = SHUFFLE_PATCH_SIZE
             self.shuffle_patch_every = SHUFFLE_PATCH_EVERY
@@ -91,8 +99,10 @@ def CGSFactory(BaseAlgoClass):
             self.shuffle_fn = shuffle_center_patches
 
             MovingAvg.__init__(self, self.network)
+
             self.update_step = 0
             self.ret_loss = float("inf")
+
 
         def update(self, minibatches, unlabeled=None):
             all_x = torch.cat([x for x, y in minibatches])
@@ -100,7 +110,7 @@ def CGSFactory(BaseAlgoClass):
 
             if self.update_step % self.shuffle_patch_every == 0 and self.update_step != 0:
                 # Train on the live network (not SMA)
-                t = self.network(all_x)
+                t = self.predict(all_x)
 
                 loss = F.cross_entropy(t, all_y)
                 self.optimizer.zero_grad()
@@ -117,7 +127,7 @@ def CGSFactory(BaseAlgoClass):
                 self.optimizer.zero_grad()
                 all_x_shuff = self.shuffle_fn(all_x, patch_size=self.shuffle_patch_size)
                 # Train on the live network for shuffled pass
-                t_sh = self.network(all_x_shuff)
+                t_sh = self.predict(all_x_shuff)
                 loss_shuff = F.cross_entropy(t_sh, all_y)
                 loss_shuff.backward()
                 
@@ -176,7 +186,7 @@ def CGSFactory(BaseAlgoClass):
                 self.ret_loss = loss.item()
 
             else:
-                # fall back to the base algorithm's normal update
+                # apply the base algorithm's normal update
                 out = super().update(minibatches, unlabeled)
                 if isinstance(out, dict) and "loss" in out:
                     self.ret_loss = float(out["loss"])
@@ -186,8 +196,21 @@ def CGSFactory(BaseAlgoClass):
             return {"loss": self.ret_loss}
 
         def predict(self, x):
-            self.network_sma.eval()
-            return self.network_sma(x)
+            # TRAIN: preserve base behavior exactly
+            if self.training:
+                return super().predict(x)
+
+            # EVAL: temporarily swap the target attr to SMA, call base predict, then restore
+            orig = getattr(self, self._cgs_target_attr)
+            try:
+                setattr(self, self._cgs_target_attr, self.network_sma)
+                self.network_sma.eval()
+                with torch.no_grad():
+                    return super().predict(x)
+            finally:
+                setattr(self, self._cgs_target_attr, orig)
+
+
 
     _CGS.__name__ = f"{BaseAlgoClass.__name__}_CGS"
     return _CGS
@@ -798,23 +821,21 @@ class AbstractDANN(Algorithm):
     def predict(self, x):
         return self.classifier(self.featurizer(x))
 
-AbstractDANN_CGS = CGSFactory(AbstractDANN)
-
-class DANN_CGS(AbstractDANN_CGS):
-    """Unconditional DANN with Conditional Gradient Shaping"""
+class DANN(AbstractDANN):
+    """Unconditional DANN"""
     def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super(DANN_CGS, self).__init__(
-            input_shape, num_classes, num_domains, hparams,
-            conditional=False, class_balance=False
-        )
+        super(DANN, self).__init__(input_shape, num_classes, num_domains,
+            hparams, conditional=False, class_balance=False)
 
-class CDANN_CGS(AbstractDANN_CGS):
-    """Conditional DANN with Conditional Gradient Shaping"""
+
+class CDANN(AbstractDANN):
+    """Conditional DANN"""
     def __init__(self, input_shape, num_classes, num_domains, hparams):
-        super(CDANN_CGS, self).__init__(
-            input_shape, num_classes, num_domains, hparams,
-            conditional=True, class_balance=True
-        )
+        super(CDANN, self).__init__(input_shape, num_classes, num_domains,
+            hparams, conditional=True, class_balance=True)
+        
+#AbstractDANN_CGS = CGSFactory(AbstractDANN)
+
 
 class MLDG(ERM):
     """
@@ -1163,6 +1184,51 @@ class RSC(ERM):
 
         return {'loss': loss.item()}
 
+class ANDMask(ERM):
+    """
+    Learning Explanations that are Hard to Vary [https://arxiv.org/abs/2009.00329]
+    AND-Mask implementation from [https://github.com/gibipara92/learning-explanations-hard-to-vary]
+    """
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(ANDMask, self).__init__(input_shape, num_classes, num_domains, hparams)
+
+        self.tau = hparams["tau"]
+
+    def update(self, minibatches, unlabeled=None):
+        mean_loss = 0
+        param_gradients = [[] for _ in self.network.parameters()]
+        for i, (x, y) in enumerate(minibatches):
+            logits = self.network(x)
+
+            env_loss = F.cross_entropy(logits, y)
+            mean_loss += env_loss.item() / len(minibatches)
+
+            env_grads = autograd.grad(env_loss, self.network.parameters())
+            for grads, env_grad in zip(param_gradients, env_grads):
+                grads.append(env_grad)
+
+        self.optimizer.zero_grad()
+        self.mask_grads(self.tau, param_gradients, self.network.parameters())
+        self.optimizer.step()
+
+        return {'loss': mean_loss}
+
+    def mask_grads(self, tau, gradients, params):
+
+        for param, grads in zip(params, gradients):
+            grads = torch.stack(grads, dim=0)
+            grad_signs = torch.sign(grads)
+            mask = torch.mean(grad_signs, dim=0).abs() >= self.tau
+            mask = mask.to(torch.float32)
+            avg_grad = torch.mean(grads, dim=0)
+
+            mask_t = (mask.sum() / mask.numel())
+            param.grad = mask * avg_grad
+            param.grad *= (1. / (1e-10 + mask_t))
+
+        return 0
+
 class ARM(ERM):
     """ Adaptive Risk Minimization (ARM) """
     def __init__(self, input_shape, num_classes, num_domains, hparams):
@@ -1191,11 +1257,11 @@ class ARM(ERM):
 IRM_CGS = CGSFactory(IRM)
 VREx_CGS = CGSFactory(VREx)
 GroupDRO_CGS = CGSFactory(GroupDRO)
-AbstractMMD_CGS = CGSFactory(AbstractMMD)
 MMD_CGS = CGSFactory(MMD)
 CORAL_CGS = CGSFactory(CORAL)
 MLDG_CGS = CGSFactory(MLDG)
 MTL_CGS = CGSFactory(MTL)
-SagNet_CGS = CGSFactory(SagNet)
+#SagNet_CGS = CGSFactory(SagNet)
 RSC_CGS = CGSFactory(RSC)
+#ANDMask_CGS = CGSFactory(ANDMask)
 ARM_CGS = CGSFactory(ARM)
