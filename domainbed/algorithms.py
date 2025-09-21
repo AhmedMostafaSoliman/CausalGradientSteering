@@ -1,4 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+from typing import List
+import itertools
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,12 +9,11 @@ import torch.autograd as autograd
 import copy
 import numpy as np
 
-
 from domainbed import networks
 from domainbed.lib.misc import (
     random_pairs_of_minibatches, split_meta_train_test, ParamDict,
-    MovingAverage, ErmPlusPlusMovingAvg, l2_between_dicts, proj, Nonparametric,
-            LARS,  SupConLossLambda, shuffle_patches, shuffle_center_patches, replace_with_average_patch,
+    MovingAverage, ErmPlusPlusMovingAvg, l2_between_dicts, proj,
+            LARS, shuffle_patches, shuffle_center_patches, replace_with_average_patch,
             voronoi_shuffle, color_histogram_shuffle, phase_scramble, slight_rotate, sobel_edges
     )
 import contextlib
@@ -80,17 +82,30 @@ class MovingAvg:
         self.network_sma.load_state_dict(new_dict)
 
 
-def CGSFactory(BaseAlgoClass, net: str = "network"):
+def CGSFactory(BaseAlgoClass, net="network", opt=None):
     class _CGS(BaseAlgoClass, MovingAvg):
         def __init__(self, input_shape, num_classes, num_domains, hparams):
             super().__init__(input_shape, num_classes, num_domains, hparams)
 
-            # record which attribute the base predict() uses (e.g., "network", "xyznet", ...)
-            self._cgs_target_attr = net
+            # --- normalize targets ---
+            if isinstance(net, (list, tuple)):
+                # multiple modules compose predict(); keep their order
+                self._cgs_target_attrs = list(net)
+                # make a single container so code sees one .parameters()
+                self.network = nn.ModuleList([getattr(self, name) for name in self._cgs_target_attrs])
+            else:
+                self._cgs_target_attrs = [net]
+                # keep update() logic unchanged by ensuring self.network points to the target
+                if net != "network":
+                    setattr(self, "network", getattr(self, net))
 
-            # keep update() logic unchanged by ensuring self.network points to the target
-            if net != "network":
-                setattr(self, "network", getattr(self, net))  # will raise if wrong name
+            # --- remember optimizers for CGS steps (only if algo has no self.optimizer) ---
+            if isinstance(opt, (list, tuple)):
+                self._cgs_opt_attrs = list(opt)
+            elif isinstance(opt, str):
+                self._cgs_opt_attrs = [opt]
+            else:
+                self._cgs_opt_attrs = None
 
             self.grad_inhib_strength = GRAD_INHIB_STRENGTH
             self.shuffle_patch_size  = SHUFFLE_PATCH_SIZE
@@ -103,6 +118,23 @@ def CGSFactory(BaseAlgoClass, net: str = "network"):
             self.update_step = 0
             self.ret_loss = float("inf")
 
+        def _cgs_zero_grad(self):
+            if hasattr(self, "optimizer"):
+                self.optimizer.zero_grad()
+            elif self._cgs_opt_attrs:
+                for name in self._cgs_opt_attrs:
+                    getattr(self, name).zero_grad()
+            else:
+                raise RuntimeError("CGS: no optimizer found; pass opt=... to CGSFactory for this algorithm.")
+
+        def _cgs_step(self):
+            if hasattr(self, "optimizer"):
+                self.optimizer.step()
+            elif self._cgs_opt_attrs:
+                for name in self._cgs_opt_attrs:
+                    getattr(self, name).step()
+            else:
+                raise RuntimeError("CGS: no optimizer found; pass opt=... to CGSFactory for this algorithm.")
 
         def update(self, minibatches, unlabeled=None):
             all_x = torch.cat([x for x, y in minibatches])
@@ -113,7 +145,7 @@ def CGSFactory(BaseAlgoClass, net: str = "network"):
                 t = self.predict(all_x)
 
                 loss = F.cross_entropy(t, all_y)
-                self.optimizer.zero_grad()
+                self._cgs_zero_grad()
                 loss.backward()
 
                 # store original grad
@@ -124,7 +156,7 @@ def CGSFactory(BaseAlgoClass, net: str = "network"):
                     else:
                         orig_grads_list.append(None)
                 
-                self.optimizer.zero_grad()
+                self._cgs_zero_grad()
                 all_x_shuff = self.shuffle_fn(all_x, patch_size=self.shuffle_patch_size)
                 # Train on the live network for shuffled pass
                 t_sh = self.predict(all_x_shuff)
@@ -182,7 +214,7 @@ def CGSFactory(BaseAlgoClass, net: str = "network"):
                     # p.grad remains as it is (which is shuff_grad_layer, possibly None).
                     # This is correct as this parameter was not involved in the original loss.
                                         
-                self.optimizer.step()
+                self._cgs_step()
                 self.ret_loss = loss.item()
 
             else:
@@ -200,17 +232,29 @@ def CGSFactory(BaseAlgoClass, net: str = "network"):
             if self.training:
                 return super().predict(x)
 
-            # EVAL: temporarily swap the target attr to SMA, call base predict, then restore
-            orig = getattr(self, self._cgs_target_attr)
-            try:
-                setattr(self, self._cgs_target_attr, self.network_sma)
-                self.network_sma.eval()
-                with torch.no_grad():
-                    return super().predict(x)
-            finally:
-                setattr(self, self._cgs_target_attr, orig)
-
-
+            # EVAL: temporarily swap the target attr(s) to SMA, call base predict, then restore
+            self.network_sma.eval()
+            if len(self._cgs_target_attrs) == 1:
+                attr = self._cgs_target_attrs[0]
+                orig = getattr(self, attr)
+                try:
+                    setattr(self, attr, self.network_sma)
+                    with torch.no_grad():
+                        return super().predict(x)
+                finally:
+                    setattr(self, attr, orig)
+            else:
+                # multiple composing modules; align by order
+                origs = []
+                try:
+                    for i, attr in enumerate(self._cgs_target_attrs):
+                        origs.append(getattr(self, attr))
+                        setattr(self, attr, self.network_sma[i])
+                    with torch.no_grad():
+                        return super().predict(x)
+                finally:
+                    for attr, orig in zip(self._cgs_target_attrs, origs):
+                        setattr(self, attr, orig)
 
     _CGS.__name__ = f"{BaseAlgoClass.__name__}_CGS"
     return _CGS
@@ -761,6 +805,125 @@ class CORAL(AbstractMMD):
     def __init__(self, input_shape, num_classes, num_domains, hparams):
         super(CORAL, self).__init__(input_shape, num_classes,
                                          num_domains, hparams, gaussian=False)
+
+class SAM(ERM):
+    """Sharpness-Aware Minimization
+    """
+    @staticmethod
+    def norm(tensor_list: List[torch.tensor], p=2):
+        """Compute p-norm for tensor list"""
+        return torch.cat([x.flatten() for x in tensor_list]).norm(p)
+
+    def update_anneal(self, x, y, **kwargs):
+        all_x = torch.cat(x)
+        all_y = torch.cat(y)
+
+        grads_i_v = []
+        i = 0
+        for x_i, y_i in zip(x, y):
+            grads_i = []
+            # 1. Compute grad of domain batch
+            loss_i = F.cross_entropy(self.predict(x_i), y_i)
+
+            # with open(f"{self.logdir}/loss_{self.test_env}_{i}.txt", "a") as f:
+            #     f.write(f"{str(loss_i.item())}\n")
+            # f.close()
+
+            # 2. Flat and add domain grads to list
+            grad_i = autograd.grad(loss_i, self.network.parameters())
+            for g in grad_i:
+                grads_i.append(g.flatten())
+            grads_i_v.append(torch.cat(grads_i))
+            i += 1
+
+        c = list(itertools.combinations(list(range(len(grads_i_v))), 2))
+
+        sims = []
+        for i, j in c:
+            sims.append(self.cos(grads_i_v[i], grads_i_v[j]))
+
+        if any(s < 0.5 for s in sims):
+            # self.anneal()
+            # print(f"Loss before: {F.cross_entropy(self.predict(all_x), all_y).item()}")
+            start = 10
+            finish = 160
+            i = 0
+            with torch.no_grad():
+                for param in self.network.parameters():
+                    if start <= i <= finish:
+                        # param.add_(torch.randn(param.size()).cuda() * 0.1)
+
+                        param.add_(torch.cuda.FloatTensor.normal_(0, 1))
+
+                        param.add_(torch.Tensor(np.random.uniform(low=self.neighborhoodSize * -1, high=self.neighborhoodSize,
+                                                                  size=param.shape)))
+                i += 1
+            # params = list(self.network.parameters())
+
+            # eps = [torch.Tensor(np.random.uniform(low=self.neighborhoodSize * -1, high=self.neighborhoodSize,
+            #                                       size=p.shape)) for p in params]
+            #
+            # start = 50
+            # finish = 155
+            # i = 0
+            # with torch.no_grad():
+            #     for p, v in zip(self.network.parameters(), eps):
+            #         if start <= i <= finish:
+            #             p.add_(v)
+            #     i += 1
+
+        loss = F.cross_entropy(self.predict(all_x), all_y)
+        # print(f"Loss after: {loss.item()}")
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        # grad_all = self.get_grads()
+
+        # for j in range(len(grads_i_v)):
+        #     sim_j = self.cos(grad_all, grads_i_v[j])
+        #     with open(f"{self.logdir}/cosine_{self.test_env}_all_{j}.txt", "a") as f:
+        #         f.write(f"{str(sim_j.item())}\n")
+        #     f.close()
+
+        self.optimizer.step()
+
+
+        return {"loss": loss.item()}
+
+
+    def update(self, minibatches, unlabeled=None, **kwargs):
+        all_x = torch.cat([xi for xi, yi in minibatches])
+        all_y = torch.cat([yi for xi, yi in minibatches])
+
+        loss = F.cross_entropy(self.predict(all_x), all_y)
+
+        # 1. eps(w) = rho * g(w) / g(w).norm(2)
+        #           = (rho / g(w).norm(2)) * g(w)
+        grad_w = autograd.grad(loss, self.network.parameters())
+        scale = self.hparams["rho"] / self.norm(grad_w)
+        eps = [g * scale for g in grad_w]
+
+        # 2. w' = w + eps(w)
+        with torch.no_grad():
+            for p, v in zip(self.network.parameters(), eps):
+                p.add_(v)
+
+        # 3. w = w - lr * g(w')
+        loss = F.cross_entropy(self.predict(all_x), all_y)
+        with open("sam_0.txt", "a") as f:
+            f.write(str(loss.item()))
+            f.write("\n")
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        # restore original network params
+        with torch.no_grad():
+            for p, v in zip(self.network.parameters(), eps):
+                p.sub_(v)
+        self.optimizer.step()
+
+        return {"loss": loss.item()}
+
 
 class AbstractDANN(Algorithm):
     """Domain-Adversarial Neural Networks (abstract class)"""
@@ -1352,8 +1515,13 @@ MMD_CGS = CGSFactory(MMD)
 CORAL_CGS = CGSFactory(CORAL)
 MLDG_CGS = CGSFactory(MLDG)
 MTL_CGS = CGSFactory(MTL)
-#SagNet_CGS = CGSFactory(SagNet)
+SagNet_CGS = CGSFactory(
+    SagNet,
+    net=("network_f", "network_c"),
+    opt=("optimizer_f", "optimizer_c")
+)
 RSC_CGS = CGSFactory(RSC)
 Fish_CGS = CGSFactory(Fish)
+SAM_CGS = CGSFactory(SAM)
 ANDMask_CGS = CGSFactory(ANDMask)
 ARM_CGS = CGSFactory(ARM)
