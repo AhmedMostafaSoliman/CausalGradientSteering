@@ -77,7 +77,7 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('mlp_depth', 3, lambda r: int(r.choice([3, 4, 5])))
         _hparam('mlp_dropout', 0., lambda r: r.choice([0., 0.1, 0.5]))
 
-    elif algorithm == 'Fish':
+    elif 'Fish' in algorithm:
         _hparam('meta_lr', 0.5, lambda r:r.choice([0.05, 0.1, 0.5]))
 
     elif algorithm == "RDM": 
@@ -112,7 +112,7 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('irm_penalty_anneal_iters', 500,
                 lambda r: int(10**r.uniform(0, 4)))
 
-    elif algorithm == "Mixup":
+    elif "Mixup" in algorithm:
         _hparam('mixup_alpha', 0.2, lambda r: 10**r.uniform(-1, 1))
 
     elif "GroupDRO" in algorithm:
@@ -136,7 +136,7 @@ def _hparams(algorithm, dataset, random_seed):
     elif algorithm == "SD":
         _hparam('sd_reg', 0.1, lambda r: 10**r.uniform(-5, -1))
 
-    elif algorithm == "ANDMask":
+    elif "ANDMask" in algorithm:
         _hparam('tau', 1, lambda r: r.uniform(0.5, 1.))
 
     elif algorithm == "IGA":
@@ -202,17 +202,17 @@ def _hparams(algorithm, dataset, random_seed):
         _hparam('dot_prod_thresh', 0.2, lambda r : r.choice([0,0.1,0.2,0.3,0.4]))
         # Cosine schedule endpoints (defaults unchanged). Random ranges chosen to preserve monotonicity.
         # - Patch size: start in {1,2,4}, end in {4,8} -> ensures end >= start for all draws.
-        _hparam('shuffle_patch_size_start', 1, lambda r: int(r.choice([1, 2, 4])))
-        _hparam('shuffle_patch_size_end', 8, lambda r: int(r.choice([4, 8, 8])))
+        #_hparam('shuffle_patch_size_start', 1, lambda r: int(r.choice([1, 2, 4])))
+        #_hparam('shuffle_patch_size_end', 8, lambda r: int(r.choice([4, 8, 8])))
         # - Center crop ratio (discrete): start in {0.8, 0.9, 1.0}, end in {0.6, 0.7, 0.8}
-        _hparam('center_crop_ratio_start', 1.0, lambda r: float(r.choice([0.8, 0.9, 1.0])))
-        _hparam('center_crop_ratio_end', 0.6, lambda r: float(r.choice([0.6, 0.7, 0.8])))
+        #_hparam('center_crop_ratio_start', 1.0, lambda r: float(r.choice([0.8, 0.9, 1.0])))
+        #_hparam('center_crop_ratio_end', 0.6, lambda r: float(r.choice([0.6, 0.7, 0.8])))
         # - Grad inhib strength (discrete): start in {0.7, 0.8, 0.9, 1.0}, end in {0.2, 0.3, 0.4, 0.5, 0.6, 0.7}
-        _hparam('grad_inhib_strength_start', 1.0, lambda r: float(r.choice([0.7, 0.8, 0.9, 1.0])))
-        _hparam('grad_inhib_strength_end', 0.2, lambda r: float(r.choice([0.2, 0.3, 0.4, 0.5, 0.6, 0.7])))
+        #_hparam('grad_inhib_strength_start', 1.0, lambda r: float(r.choice([0.7, 0.8, 0.9, 1.0])))
+        #_hparam('grad_inhib_strength_end', 0.2, lambda r: float(r.choice([0.2, 0.3, 0.4, 0.5, 0.6, 0.7])))
         # - Schedule window: start in {0.0, 0.1, 0.2}, end in {0.8, 0.9, 1.0} -> end >= start always.
-        _hparam('sched_start_pct', 0.0, lambda r: float(np.round(r.choice([0.0, 0.1, 0.2]), 2)))
-        _hparam('sched_end_pct', 1.0, lambda r: float(np.round(r.choice([0.8, 0.9, 1.0]), 2)))
+        #_hparam('sched_start_pct', 0.0, lambda r: float(np.round(r.choice([0.0, 0.1, 0.2]), 2)))
+        #_hparam('sched_end_pct', 1.0, lambda r: float(np.round(r.choice([0.8, 0.9, 1.0]), 2)))
 
     if algorithm == "ADRMX":
         _hparam('cnt_lambda', 1.0, lambda r: r.choice([1.0]))

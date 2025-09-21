@@ -603,6 +603,37 @@ class VREx(ERM):
         return {'loss': loss.item(), 'nll': nll.item(),
                 'penalty': penalty.item()}
 
+class Mixup(ERM):
+    """
+    Mixup of minibatches from different domains
+    https://arxiv.org/pdf/2001.00677.pdf
+    https://arxiv.org/pdf/1912.01805.pdf
+    """
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(Mixup, self).__init__(input_shape, num_classes, num_domains,
+                                    hparams)
+
+    def update(self, minibatches, unlabeled=None):
+        objective = 0
+
+        for (xi, yi), (xj, yj) in random_pairs_of_minibatches(minibatches):
+            lam = np.random.beta(self.hparams["mixup_alpha"],
+                                 self.hparams["mixup_alpha"])
+
+            x = lam * xi + (1 - lam) * xj
+            predictions = self.predict(x)
+
+            objective += lam * F.cross_entropy(predictions, yi)
+            objective += (1 - lam) * F.cross_entropy(predictions, yj)
+
+        objective /= len(minibatches)
+
+        self.optimizer.zero_grad()
+        objective.backward()
+        self.optimizer.step()
+
+        return {'loss': objective.item()}
+    
 class GroupDRO(ERM):
     """
     Robust ERM minimizes the error at the worst minibatch
@@ -1229,6 +1260,65 @@ class ANDMask(ERM):
 
         return 0
 
+class Fish(Algorithm):
+    """
+    Implementation of Fish, as seen in Gradient Matching for Domain
+    Generalization, Shi et al. 2021.
+    """
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(Fish, self).__init__(input_shape, num_classes, num_domains,
+                                   hparams)
+        self.input_shape = input_shape
+        self.num_classes = num_classes
+
+        self.network = networks.WholeFish(input_shape, num_classes, hparams)
+        self.optimizer = torch.optim.Adam(
+            self.network.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.optimizer_inner_state = None
+
+    def create_clone(self, device):
+        self.network_inner = networks.WholeFish(self.input_shape, self.num_classes, self.hparams,
+                                            weights=self.network.state_dict()).to(device)
+        self.optimizer_inner = torch.optim.Adam(
+            self.network_inner.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        if self.optimizer_inner_state is not None:
+            self.optimizer_inner.load_state_dict(self.optimizer_inner_state)
+
+    def fish(self, meta_weights, inner_weights, lr_meta):
+        meta_weights = ParamDict(meta_weights)
+        inner_weights = ParamDict(inner_weights)
+        meta_weights += lr_meta * (inner_weights - meta_weights)
+        return meta_weights
+
+    def update(self, minibatches, unlabeled=None):
+        self.create_clone(minibatches[0][0].device)
+
+        for x, y in minibatches:
+            loss = F.cross_entropy(self.network_inner(x), y)
+            self.optimizer_inner.zero_grad()
+            loss.backward()
+            self.optimizer_inner.step()
+
+        self.optimizer_inner_state = self.optimizer_inner.state_dict()
+        meta_weights = self.fish(
+            meta_weights=self.network.state_dict(),
+            inner_weights=self.network_inner.state_dict(),
+            lr_meta=self.hparams["meta_lr"]
+        )
+        self.network.reset_weights(meta_weights)
+
+        return {'loss': loss.item()}
+
+    def predict(self, x):
+        return self.network(x)
+
 class ARM(ERM):
     """ Adaptive Risk Minimization (ARM) """
     def __init__(self, input_shape, num_classes, num_domains, hparams):
@@ -1257,11 +1347,13 @@ class ARM(ERM):
 IRM_CGS = CGSFactory(IRM)
 VREx_CGS = CGSFactory(VREx)
 GroupDRO_CGS = CGSFactory(GroupDRO)
+Mixup_CGS = CGSFactory(Mixup)
 MMD_CGS = CGSFactory(MMD)
 CORAL_CGS = CGSFactory(CORAL)
 MLDG_CGS = CGSFactory(MLDG)
 MTL_CGS = CGSFactory(MTL)
 #SagNet_CGS = CGSFactory(SagNet)
 RSC_CGS = CGSFactory(RSC)
-#ANDMask_CGS = CGSFactory(ANDMask)
+Fish_CGS = CGSFactory(Fish)
+ANDMask_CGS = CGSFactory(ANDMask)
 ARM_CGS = CGSFactory(ARM)
