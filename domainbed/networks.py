@@ -6,6 +6,10 @@ import torch.nn.functional as F
 import torchvision.models
 
 from domainbed.lib import wide_resnet
+from domainbed.models.resnet_mixstyle import (
+    resnet18_mixstyle_L234_p0d5_a0d1,
+    resnet50_mixstyle_L234_p0d5_a0d1,
+)
 import copy
 
 import timm
@@ -66,373 +70,33 @@ class MLP(nn.Module):
         x = self.output(x)
         return x
     
-"""
-#from dinov2.models.vision_transformer import vit_small_inhib, vit_small, vit_base_inhib
-#from dinov2.hub.utils import _DINOV2_BASE_URL, _make_dinov2_model_name
 
-class DinoV2(torch.nn.Module):
-    """ """
-    def __init__(self,input_shape, hparams):
-        super(DinoV2, self).__init__()
-
-        self.network = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
-        #print network no. of paramters
-        print("Number of parameters in DinoV2: ", sum(p.numel() for p in self.network.parameters()))
-        self.n_outputs =  5 * 768
-
-        nc = input_shape[0]
-
-        if nc != 3:
-            raise RuntimeError("Inputs must have 3 channels")
-
-        self.hparams = hparams
-        self.dropout = nn.Dropout(hparams['vit_dropout'])
-
-        if hparams["vit_attn_tune"]:
-            for n,p in self.network.named_parameters():
-                if 'attn' in n:
-                    p.requires_grad = True
-                else:
-                    p.requires_grad = False
-
-
-    def forward(self, x):
-        x = self.network.get_intermediate_layers(x, n=4, return_class_token=True)
-        linear_input = torch.cat([
-            x[0][1],
-            x[1][1],
-            x[2][1],
-            x[3][1],
-            x[3][0].mean(1)
-            ], dim=1)
-        return self.dropout(linear_input)
-
-
-
-
-class CLIPInhib(nn.Module):
-    def get_module(self, module, name):
-        for n, m in module.named_modules():
-            if n == name:
-                return m
-
-    def build_blocks(self, model, block_name_dict):
-        #  blocks = nn.ModuleList()
-        blocks = []  # saved model can be broken...
-        for _key, name_list in block_name_dict.items():
-            block = nn.ModuleList()
-            for module_name in name_list:
-                module = self.get_module(model, module_name)
-                block.append(module)
-            blocks.append(block)
-
-        return blocks
-    
-    def freeze_(self, model):
-        #Freeze model
-        #Note that this function does not control BN
-        
-        for p in model.parameters():
-            p.requires_grad_(False)
-    
-    def hook(self, module, input, output):
-        self._features.append(output)
-
-    def build_feature_hooks(self, feats, block_names):
-        assert feats in ["stem_block", "block"]
-
-        if feats is None:
-            return []
-
-        # build feat layers
-        if feats.startswith("stem"):
-            last_stem_name = block_names["stem"][-1]
-            feat_layers = [last_stem_name]
-        else:
-            feat_layers = []
-
-        for name, module_names in block_names.items():
-            if name == "stem":
-                continue
-
-            module_name = module_names[-1]
-            feat_layers.append(module_name)
-
-        #  print(f"feat layers = {feat_layers}")
-
-        for n, m in self.network.named_modules():
-            if n in feat_layers:
-                m.register_forward_hook(self.hook)
-
-        return feat_layers
-
-    def __init__(self, input_shape, hparams):
-        # get backbone
-        super(CLIPInhib, self).__init__()
-        network = timm.create_model('vit_base_patch16_clip_224.laion2b', pretrained=True)
-        n_outputs = network.num_features
-        network.head = Identity()
-        for name, param in network.named_parameters():
-            param.requires_grad = False
-        #require_grad_params1, names = inject_trainable_moe_kronecker_new(network, r=[1, 2, 4, 8], where='every_qkv')
-        require_grad_params2 = inject_trainable_moe_kronecker_inhib(network, r=[1, 2, 4, 8], where='every_qkv')
-        require_grad_params = require_grad_params2 # +require_grad_params1
-        setattr(network, 'require_grad_params', require_grad_params)
-        # set network and n oututs
-        self.network, self.n_outputs = network, n_outputs
-        print("Number of parameters in CLIP(base) original kadapter: ", sum(p.numel() for p in self.network.parameters()))
-        print(self.network)
-
-        #     
-        self.blocknames = {  # clip vit-base
-            "stem": ["patch_embed"],
-            "block1": ["blocks.0", "blocks.1", "blocks.2"],
-            "block2": ["blocks.3", "blocks.4", "blocks.5"],
-            "block3": ["blocks.6", "blocks.7", "blocks.8"],
-            "block4": ["blocks.9", "blocks.10", "blocks.11"],
-        }
-        self._features = []
-        self.feat_layers = self.build_feature_hooks("block", self.blocknames)
-        self.blocks = self.build_blocks(self.network, self.blocknames)
-
-
-    def forward(self, x):
-        self.clear_features()
-        out = self.network(x)
-        return out
-
-    def clear_features(self):
-        self._features.clear()
-
-
-
-
-class DinoV2InhibBase(nn.Module):
-    #
-    #Vision Transformer with Attention Inhibition (AttentionIn) for parameter-efficient fine-tuning.
-    
-    #This class initializes the vit_small_inhib model, loads pre-trained weights excluding
-    #adapter parameters, freezes the original model parameters, and ensures that only the
-    #adapter parameters are trainable.
-    
-    def __init__(self, input_shape, hparams):
-        super(DinoV2InhibBase, self).__init__()
-        self.arch_name = "vit_base"
-        self.patch_size = 14
-        self.num_register_tokens = hparams.get('num_register_tokens', 0)
-        print("Inhib type: AttentionInLateSoftmax")
-        print("size:base")
-        print("adapter_dim: 324")
-        print("inhib_scale: self.inhib_scale ((self.adapter_dim//num_heads) ** -0.5)")
-        print("proj_down:no")
-        print("lambda_i initial: 0.05")
-        print("softmax on attn_inhib: no")
-        print("fine_tuning_mode: attn + adapter + lambda")
-        # Initialize the vit_small_inhib model
-        self.network = vit_base_inhib(
-            patch_size=14,
-            adapter_dim=324,
-            inhib_type='AttentionInLateSoftmax',
-            num_register_tokens=hparams.get('num_register_tokens', 0),
-            img_size=518,
-            init_values=1.0,
-            block_chunks=0,
-            )
-
-        print("Number of parameters in DinoV2(s) Inhib: ", sum(p.numel() for p in self.network.parameters()))
-
-        # Load pre-trained weights
-        self._load_pretrained_weights()        
-       
-        # Define dropout and any additional layers if needed
-        self.dropout = nn.Dropout(hparams.get('dropout', 0.1))
-        
-        # Define the number of output features (modify based on your requirements)
-        self.n_outputs = 5 * 768
-
-        if hparams["vit_attn_tune"]:
-            for n,p in self.network.named_parameters():
-                if 'adapter' in n or 'lambda' in n or 'lora' in n:
-                    p.requires_grad = True
-                else:
-                    p.requires_grad = False
-
-    
-    def _load_pretrained_weights(self):
-        #Loads pre-trained weights into the model, excluding adapter parameters.
-        model_base_name = _make_dinov2_model_name(self.arch_name, self.patch_size)
-        model_full_name = _make_dinov2_model_name(self.arch_name, self.patch_size, self.num_register_tokens)
-        url = _DINOV2_BASE_URL + f"/{model_base_name}/{model_full_name}_pretrain.pth"
-        pretrained_state_dict = torch.hub.load_state_dict_from_url(url, map_location="cpu")
-        self.network.load_state_dict(pretrained_state_dict, strict=False)        
-        print("Pre-trained weights loaded successfully, excluding adapter parameters.")
-    
-    def _freeze_original_parameters(self):
-        
-        #Freezes the original model parameters to prevent them from being updated during training.
-        #Only adapter parameters remain trainable.
-        
-        for name, param in self.network.named_parameters():
-            if not name.startswith('adapter'):
-                param.requires_grad = False
-        
-        print("Original model parameters are frozen. Only adapter parameters are trainable.")
-        
-    def forward(self, x):
-        
-        #Forward pass of the VisionTransformerInhib model.
-        
-        #Args:
-        #    x (Tensor): Input tensor of shape (B, C, H, W)
-        
-        #Returns:
-        #    Tensor: Output features after processing through the network
-        
-        # Get intermediate layers
-        intermediate_outputs = self.network.get_intermediate_layers(x, n=4, return_class_token=True)
-        
-        # Concatenate class tokens and mean of the last layer's tokens
-        linear_input = torch.cat([
-            intermediate_outputs[0][1],  # Class token from layer 1
-            intermediate_outputs[1][1],  # Class token from layer 2
-            intermediate_outputs[2][1],  # Class token from layer 3
-            intermediate_outputs[3][1],  # Class token from layer 4
-            intermediate_outputs[3][0].mean(1)  # Mean of tokens from layer 4
-        ], dim=1)
-        
-        return self.dropout(linear_input)
-
-
-class DinoV2Inhib(nn.Module):
-    
-    #Vision Transformer with Attention Inhibition (AttentionIn) for parameter-efficient fine-tuning.
-    
-    #This class initializes the vit_small_inhib model, loads pre-trained weights excluding
-    #adapter parameters, freezes the original model parameters, and ensures that only the
-    #adapter parameters are trainable.
-    
-    def __init__(self, input_shape, hparams):
-        super(DinoV2Inhib, self).__init__()
-        self.arch_name = "vit_small"
-        self.patch_size = 14
-        self.num_register_tokens = hparams.get('num_register_tokens', 0)
-        print("Inhib type: Competitive adapter with qk")
-        print("size:small")
-        print("adapter_dim: 144")
-        print("inhib_scale: self.inhib_scale ((self.adapter_dim//num_heads) ** -0.5)")
-        print("proj_down:no")
-        print("lambda_i initial: 0.05")
-        print("softmax on attn_inhib: no")
-        print("fine_tuning_mode: attn + adapter + lambda")
-        # Initialize the vit_small_inhib model
-        self.network = vit_small_inhib(
-            patch_size=14,
-            adapter_dim=144,
-            inhib_type='AttentionIn',
-            num_register_tokens=hparams.get('num_register_tokens', 0),
-            img_size=518,
-            init_values=1.0,
-            block_chunks=0,
-            )
-
-        print("Number of parameters in DinoV2(s) Inhib: ", sum(p.numel() for p in self.network.parameters()))
-
-        # Load pre-trained weights
-        self._load_pretrained_weights()
-        
-        # Freeze original model parameters
-        #self._freeze_original_parameters()
-        
-        # Define dropout and any additional layers if needed
-        self.dropout = nn.Dropout(hparams.get('dropout', 0.1))
-        
-        # Define the number of output features (modify based on your requirements)
-        self.n_outputs = 5 * 384
-
-        if hparams["vit_attn_tune"]:
-            for n,p in self.network.named_parameters():
-                if 'adapter' in n or 'lambda' in n:
-                    p.requires_grad = True
-                else:
-                    p.requires_grad = False
-
-    
-    def _load_pretrained_weights(self):
-        
-        #Loads pre-trained weights into the model, excluding adapter parameters.
-        
-        model_base_name = _make_dinov2_model_name(self.arch_name, self.patch_size)
-        model_full_name = _make_dinov2_model_name(self.arch_name, self.patch_size, self.num_register_tokens)
-        url = _DINOV2_BASE_URL + f"/{model_base_name}/{model_full_name}_pretrain.pth"
-        pretrained_state_dict = torch.hub.load_state_dict_from_url(url, map_location="cpu")
-        #model_state_dict = self.network.state_dict()
-        #pretrained_network = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
-        # # Filter out adapter parameters and only load matching parameters
-        # filtered_pretrained_dict = {
-        #     k: v for k, v in pretrained_state_dict.items()
-        #     if k in model_state_dict and v.shape == model_state_dict[k].shape
-        # }
-        # # Update the model's state dict with the filtered pre-trained weights
-        # model_state_dict.update(filtered_pretrained_dict)
-        
-        # Load the updated state dict into the model
-        self.network.load_state_dict(pretrained_state_dict, strict=False)
-        
-        print("Pre-trained weights loaded successfully, excluding adapter parameters.")
-    
-    def _freeze_original_parameters(self):
-        
-        #Freezes the original model parameters to prevent them from being updated during training.
-        #Only adapter parameters remain trainable.
-        
-        for name, param in self.network.named_parameters():
-            if not name.startswith('adapter'):
-                param.requires_grad = False
-        
-        print("Original model parameters are frozen. Only adapter parameters are trainable.")
-        
-    def forward(self, x):
-        
-        #Forward pass of the VisionTransformerInhib model.
-        
-        #Args:
-        #    x (Tensor): Input tensor of shape (B, C, H, W)
-        
-        #Returns:
-        #    Tensor: Output features after processing through the network
-        
-        # Get intermediate layers
-        intermediate_outputs = self.network.get_intermediate_layers(x, n=4, return_class_token=True)
-        
-        # Concatenate class tokens and mean of the last layer's tokens
-        linear_input = torch.cat([
-            intermediate_outputs[0][1],  # Class token from layer 1
-            intermediate_outputs[1][1],  # Class token from layer 2
-            intermediate_outputs[2][1],  # Class token from layer 3
-            intermediate_outputs[3][1],  # Class token from layer 4
-            intermediate_outputs[3][0].mean(1)  # Mean of tokens from layer 4
-        ], dim=1)
-        
-        return self.dropout(linear_input)
-
-"""
 class ResNet(torch.nn.Module):
     """ResNet with the softmax chopped off and the batchnorm frozen"""
-    def __init__(self, input_shape, hparams):
+    # --- CHANGE: add optional `network=None` ---
+    def __init__(self, input_shape, hparams, network=None):
         super(ResNet, self).__init__()
-        if hparams['resnet18']:
-            self.network = torchvision.models.resnet18(pretrained=True)
-            self.n_outputs = 512
+
+        # --- NEW block: honor a provided backbone; else keep old path verbatim ---
+        if network is not None:
+            # Use the provided backbone (e.g., MixStyle2 variants)
+            self.network = network
+            # Keep feature dim consistent with old logic (uses resnet18 flag)
+            self.n_outputs = 512 if hparams['resnet18'] else 2048
         else:
-            self.network = torchvision.models.resnet50(pretrained=True)
-            self.n_outputs = 2048
+            # --- OLD logic, unchanged ---
+            if hparams['resnet18']:
+                self.network = torchvision.models.resnet18(pretrained=True)
+                self.n_outputs = 512
+            else:
+                self.network = torchvision.models.resnet50(pretrained=True)
+                self.n_outputs = 2048
 
-        if hparams['resnet50_augmix']:
-            self.network = timm.create_model('resnet50.ram_in1k', pretrained=True)
-            self.n_outputs = 2048
+            if hparams['resnet50_augmix']:
+                self.network = timm.create_model('resnet50.ram_in1k', pretrained=True)
+                self.n_outputs = 2048
 
-        # self.network = remove_batch_norm_from_resnet(self.network)
-
+        # --- everything below is unchanged ---
         # adapt number of channels
         nc = input_shape[0]
         if nc != 3:

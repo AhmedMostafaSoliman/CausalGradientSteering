@@ -1661,7 +1661,9 @@ class Mixstyle2(Algorithm):
 
         self.classifier = nn.Linear(self.featurizer.n_outputs, num_classes)
         self.network = nn.Sequential(self.featurizer, self.classifier)
-        self.optimizer = self.new_optimizer(self.network.parameters())
+        self.optimizer = torch.optim.Adam(self.network.parameters(),
+                                          lr=hparams["lr"],
+                                          weight_decay=hparams['weight_decay'])
 
     def pair_batches(self, xs, ys):
         xs = [x.chunk(2) for x in xs]
@@ -1677,7 +1679,9 @@ class Mixstyle2(Algorithm):
 
         return pairs
 
-    def update(self, x, y, **kwargs):
+    def update(self, minibatches, unlabeled=None, **kwargs):
+        x = [x for x, y in minibatches]
+        y = [y for x, y in minibatches]
         pairs = self.pair_batches(x, y)
         loss = 0.0
 
@@ -1722,3 +1726,4 @@ ARM_CGS = CGSFactory(ARM)
 GSAM_CGS = CGSFactory(GSAM)
 SAGM_DG_CGS = CGSFactory(SAGM_DG)
 Mixstyle_CGS = CGSFactory(Mixstyle)
+Mixstyle2_CGS = CGSFactory(Mixstyle2)
