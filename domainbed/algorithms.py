@@ -16,7 +16,17 @@ from domainbed.lib.misc import (
             LARS, shuffle_patches, shuffle_center_patches, replace_with_average_patch,
             voronoi_shuffle, color_histogram_shuffle, phase_scramble, slight_rotate, sobel_edges
     )
-import contextlib
+
+from domainbed.models.resnet_mixstyle import (
+    resnet18_mixstyle_L234_p0d5_a0d1,
+    resnet50_mixstyle_L234_p0d5_a0d1,
+)
+from domainbed.models.resnet_mixstyle2 import (
+    resnet18_mixstyle2_L234_p0d5_a0d1,
+    resnet50_mixstyle2_L234_p0d5_a0d1,
+)
+
+from domainbed import gsam, sagm
 
 ALGORITHMS = [
     'ERM',
@@ -1506,7 +1516,191 @@ class ARM(ERM):
         x = torch.cat([x, context], dim=1)
         return self.network(x)
 
- 
+class GSAM(Algorithm):
+    """
+    Surrogate Gap Guided Sharpness-Aware Minimization
+    """
+
+    # def __init__(self, input_shape, num_classes, num_domains, hparams):
+    #     assert input_shape[1:3] == (224, 224), "Mixstyle support R18 and R50 only"
+    #     super().__init__(input_shape, num_classes, num_domains, hparams)
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super().__init__(input_shape, num_classes, num_domains, hparams)
+        self.featurizer = networks.Featurizer(input_shape, self.hparams)
+        self.classifier = nn.Linear(self.featurizer.n_outputs, num_classes)
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        self.optimizer = torch.optim.Adam(
+            self.network.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams["weight_decay"],
+        )
+
+        self.lr_scheduler = gsam.LinearScheduler(T_max=5000, max_value=self.hparams["lr"],
+                                            min_value=self.hparams["lr"], optimizer=self.optimizer)
+
+        self.rho_scheduler = gsam.LinearScheduler(T_max=5000, max_value=0.05,
+                                             min_value=0.05)
+
+        self.GSAM_optimizer = gsam.GSAM(params=self.network.parameters(), base_optimizer=self.optimizer, model=self.network,
+                                        gsam_alpha=self.hparams["alpha"], rho_scheduler=self.rho_scheduler, adaptive=False)
+
+
+    def update(self, minibatches, unlabeled=None, **kwargs):
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+
+        def loss_fn(predictions, targets):
+            return F.cross_entropy(predictions, targets)
+
+        self.GSAM_optimizer.set_closure(loss_fn, all_x, all_y)
+        predictions, loss = self.GSAM_optimizer.step()
+        self.lr_scheduler.step()
+        self.GSAM_optimizer.update_rho_t()
+
+
+        return {"loss": loss.item()}
+
+    def predict(self, x):
+        return self.network(x)
+
+class SAGM_DG(Algorithm):
+    """
+    Sharpness-Aware Gradient Matching for Domain Generalization
+    """
+
+    # def __init__(self, input_shape, num_classes, num_domains, hparams):
+    #     assert input_shape[1:3] == (224, 224), "Mixstyle support R18 and R50 only"
+    #     super().__init__(input_shape, num_classes, num_domains, hparams)
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super().__init__(input_shape, num_classes, num_domains, hparams)
+        self.featurizer = networks.Featurizer(input_shape, self.hparams)
+        self.classifier = nn.Linear(self.featurizer.n_outputs, num_classes)
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        self.optimizer = torch.optim.Adam(
+            self.network.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams["weight_decay"],
+        )
+
+        self.lr_scheduler = sagm.LinearScheduler(T_max=5000, max_value=self.hparams["lr"],
+                                            min_value=self.hparams["lr"], optimizer=self.optimizer)
+
+        self.rho_scheduler = sagm.LinearScheduler(T_max=5000, max_value=0.05,
+                                             min_value=0.05)
+
+        self.SAGM_optimizer = sagm.SAGM(params=self.network.parameters(), base_optimizer=self.optimizer, model=self.network,
+                                   alpha=self.hparams["alpha"], rho_scheduler=self.rho_scheduler, adaptive=False)
+
+        self.cos = nn.CosineSimilarity(dim=0)
+
+        self.neighborhoodSize = hparams["neighborhoodSize"]
+        self.best_loss = np.inf
+
+
+    def update(self, minibatches, unlabeled=None, **kwargs):
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+
+        def loss_fn(predictions, targets):
+            return F.cross_entropy(predictions, targets)
+
+        self.SAGM_optimizer.set_closure(loss_fn, all_x, all_y)
+        predictions, loss = self.SAGM_optimizer.step()
+        self.lr_scheduler.step()
+        self.SAGM_optimizer.update_rho_t()
+
+
+        return {"loss": loss.item()}
+
+    def predict(self, x):
+        return self.network(x)
+
+class Mixstyle(Algorithm):
+    """MixStyle w/o domain label (random shuffle)"""
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        assert input_shape[1:3] == (224, 224), "Mixstyle support R18 and R50 only"
+        super().__init__(input_shape, num_classes, num_domains, hparams)
+        if hparams["resnet18"]:
+            network = resnet18_mixstyle_L234_p0d5_a0d1()
+        else:
+            # network = resnet50_mixstyle_L234_p0d5_a0d1(postion=["conv2_x", "conv3_x", "conv4_x"])
+            network = resnet50_mixstyle_L234_p0d5_a0d1(postion=[])
+
+        self.featurizer = networks.ResNet(input_shape, self.hparams, network)
+
+        self.classifier = nn.Linear(self.featurizer.n_outputs, num_classes)
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        self.optimizer = self.new_optimizer(self.network.parameters())
+
+    def update(self, minibatches, unlabeled=None):
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        loss = F.cross_entropy(self.predict(all_x), all_y)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {"loss": loss.item()}
+
+    def predict(self, x):
+        return self.network(x)
+
+class Mixstyle2(Algorithm):
+    """MixStyle w/ domain label"""
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        assert input_shape[1:3] == (224, 224), "Mixstyle support R18 and R50 only"
+        super().__init__(input_shape, num_classes, num_domains, hparams)
+        if hparams["resnet18"]:
+            network = resnet18_mixstyle2_L234_p0d5_a0d1()
+        else:
+            network = resnet50_mixstyle2_L234_p0d5_a0d1()
+        self.featurizer = networks.ResNet(input_shape, self.hparams, network)
+
+        self.classifier = nn.Linear(self.featurizer.n_outputs, num_classes)
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        self.optimizer = self.new_optimizer(self.network.parameters())
+
+    def pair_batches(self, xs, ys):
+        xs = [x.chunk(2) for x in xs]
+        ys = [y.chunk(2) for y in ys]
+        N = len(xs)
+        pairs = []
+        for i in range(N):
+            j = i + 1 if i < (N - 1) else 0
+            xi, yi = xs[i][0], ys[i][0]
+            xj, yj = xs[j][1], ys[j][1]
+
+            pairs.append(((xi, yi), (xj, yj)))
+
+        return pairs
+
+    def update(self, x, y, **kwargs):
+        pairs = self.pair_batches(x, y)
+        loss = 0.0
+
+        for (xi, yi), (xj, yj) in pairs:
+            #  Mixstyle2:
+            #  For the input x, the first half comes from one domain,
+            #  while the second half comes from the other domain.
+            x2 = torch.cat([xi, xj])
+            y2 = torch.cat([yi, yj])
+            loss += F.cross_entropy(self.predict(x2), y2)
+
+        loss /= len(pairs)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {"loss": loss.item()}
+
+    def predict(self, x):
+        return self.network(x)
+
+
 IRM_CGS = CGSFactory(IRM)
 VREx_CGS = CGSFactory(VREx)
 GroupDRO_CGS = CGSFactory(GroupDRO)
@@ -1525,3 +1719,6 @@ Fish_CGS = CGSFactory(Fish)
 SAM_CGS = CGSFactory(SAM)
 ANDMask_CGS = CGSFactory(ANDMask)
 ARM_CGS = CGSFactory(ARM)
+GSAM_CGS = CGSFactory(GSAM)
+SAGM_DG_CGS = CGSFactory(SAGM_DG)
+Mixstyle_CGS = CGSFactory(Mixstyle)

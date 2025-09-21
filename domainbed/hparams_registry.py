@@ -136,9 +136,10 @@ def _hparams(algorithm, dataset, random_seed):
     elif algorithm == "SD":
         _hparam('sd_reg', 0.1, lambda r: 10**r.uniform(-5, -1))
 
-    elif "SAM" in algorithm:
+    elif "SAM" in algorithm or "GSAM" in algorithm or "SAGM" in algorithm:
         hparams["rho"] = (0.05, lambda r: r.choice([0.01, 0.02, 0.05, 0.1]))
         hparams["alpha"] = (0.001, lambda r: r.choice([0.01, 0.02, 0.05, 0.1]))
+        hparams['neighborhoodSize'] = (0.000001,0.000001)
 
     elif "ANDMask" in algorithm:
         _hparam('tau', 1, lambda r: r.uniform(0.5, 1.))
