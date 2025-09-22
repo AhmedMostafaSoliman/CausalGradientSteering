@@ -1,0 +1,11 @@
+**/*.pyc
+*.pyc
+__pycache__/
+*.pkl
+*.txt
+*.jsonl
+results/*
+*.err
+*.out
+/domainbed/lib_augmentations/
+/domainbed/data/
