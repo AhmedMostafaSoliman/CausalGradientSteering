@@ -44,9 +44,19 @@ python -m domainbed.scripts.sweep launch \
   "${AUG_FLAGS[@]}"
 
 echo
+echo "Sweep completed. Collecting results..."
+echo
+
+########################################
+# Collect results from the sweep
+########################################
+python -m domainbed.scripts.collect_results --input_dir="${OUTPUT_DIR}/${TAG}"
+
+echo
 echo "Launched sweep:"
 echo "  Dataset: ${DATASET}"
 echo "  Algorithm: ${ALGO}"
 echo "  Augs: Original + ${AUG2}"
 echo "  Trials: ${N_TRIALS}"
 echo "  Output: ${OUTPUT_DIR}/${TAG}"
+echo "Results collected from: ${OUTPUT_DIR}/${TAG}"
